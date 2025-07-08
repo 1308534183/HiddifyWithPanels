@@ -29,55 +29,6 @@ env:
   TARGET_NAME_rpm: "Hiddify-rpm-x64"
 
 jobs:
-  build_linux:
-    permissions: write-all
-    runs-on: ubuntu-22.04
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v3
-
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2.16.0
-        with:
-          flutter-version: ${{ env.FLUTTER_VERSION }}
-          channel: 'stable'
-          cache: true
-
-      - name: Setup dependencies
-        run: make linux-install-dependencies
-
-      - name: Prepare for Linux
-        run: make linux-prepare
-
-      - name: Build Linux
-        env:
-          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
-        run: make linux-release
-
-      - name: Copy to out Linux
-        run: |
-          ls -R dist/
-          mkdir out
-          mkdir tmp_out
-          for EXT in AppImage deb rpm; do
-            KEY=TARGET_NAME_${EXT}
-            FILENAME=${!KEY}
-            echo "For $EXT ($KEY) filename is ${FILENAME}"
-            mv dist/*/*.$EXT tmp_out/${FILENAME}.$EXT
-            ls tmp_out
-            chmod +x tmp_out/${FILENAME}.$EXT
-            cp ./.github/help/linux/* tmp_out/
-            mv tmp_out/${FILENAME}.$EXT out/
-          done
-
-      - name: Upload Linux Artifact
-        if: env.UPLOAD_ARTIFACT == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux
-          path: ./out
-          retention-days: 1
-
   build_apk:
     permissions: write-all
     runs-on: ubuntu-latest
