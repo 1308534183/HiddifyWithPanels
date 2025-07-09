@@ -51,9 +51,9 @@ class UserInfo {
       createdAt: json['created_at'] as int? ?? 0,
 
       // 处理布尔值
-      banned: (json['banned'] as bool? ?? 0) == 1,
-      remindExpire: (json['remind_expire'] as bool? ?? 0) == 1,
-      remindTraffic: (json['remind_traffic'] as bool? ?? 0) == 1,
+      banned: (json['banned'] as int? ?? 0) == 1,
+      remindExpire: (json['remind_expire'] as int? ?? 0) == 1,
+      remindTraffic: (json['remind_traffic'] as int? ?? 0) == 1,
 
       // 允许 expiredAt 为 null
       expiredAt: json['expired_at'] as int?,
