@@ -36,28 +36,48 @@ class UserInfo {
   });
 
   // 从 JSON 创建 UserInfo 实例
-factory UserInfo.fromJson(Map<String, dynamic> json) {
-  return UserInfo(
-    email: json['email'] as String? ?? '',
-    transferEnable: (json['transfer_enable'] as num?)?.toDouble() ?? 0.0,
-    lastLoginAt: json['last_login_at'] as int?,
-    createdAt: json['created_at'] as int? ?? 0,
+  factory UserInfo.fromJson(Map<String, dynamic> json) {
+    return UserInfo(
+      // 字符串字段，如果为 null，返回空字符串
+      email: json['email'] as String? ?? '',
 
-    // 仅修改 bool 字段的解析逻辑（直接解析 bool，null 时默认 false）
-    banned: json['banned'] as bool? ?? false,
-    remindExpire: json['remind_expire'] as bool? ?? false,
-    remindTraffic: json['remind_traffic'] as bool? ?? false,
+      // 转换为 double，如果为 null，返回 0.0
+      transferEnable: (json['transfer_enable'] as num?)?.toDouble() ?? 0.0,
 
-    // 其他字段保持原有逻辑不变
-    expiredAt: json['expired_at'] as int?,
-    balance: (json['balance'] as num?)?.toDouble() ?? 0.0,
-    commissionBalance: (json['commission_balance'] as num?)?.toDouble() ?? 0.0,
-    planId: json['plan_id'] as int? ?? 0,
-    discount: (json['discount'] as num?)?.toDouble(),
-    commissionRate: (json['commission_rate'] as num?)?.toDouble(),
-    telegramId: json['telegram_id'] as String?,
-    uuid: json['uuid'] as String? ?? '',
-    avatarUrl: json['avatar_url'] as String? ?? '',
-  );
+      // 时间字段可以为 null
+      lastLoginAt: json['last_login_at'] as int?,
+
+      // 确保 createdAt 为 int，并提供默认值
+      createdAt: json['created_at'] as int? ?? 0,
+
+      // 处理布尔值
+      banned: (json['banned'] as bool? ?? 0) == 1,
+      remindExpire: (json['remind_expire'] as bool? ?? 0) == 1,
+      remindTraffic: (json['remind_traffic'] as bool? ?? 0) == 1,
+
+      // 允许 expiredAt 为 null
+      expiredAt: json['expired_at'] as int?,
+
+      // 转换 balance 为 double，并处理 null
+      balance: (json['balance'] as num?)?.toDouble() ?? 0.0,
+
+      // 转换 commissionBalance 为 double，并处理 null
+      commissionBalance:
+          (json['commission_balance'] as num?)?.toDouble() ?? 0.0,
+
+      // 保证 planId 是 int，提供默认值 0
+      planId: json['plan_id'] as int? ?? 0,
+
+      // 允许 discount 和 commissionRate 为 null
+      discount: (json['discount'] as num?)?.toDouble(),
+      commissionRate: (json['commission_rate'] as num?)?.toDouble(),
+
+      // 允许 telegramId 为 null
+      telegramId: json['telegram_id'] as String?,
+
+      // uuid 和 avatarUrl，如果为 null 返回空字符串
+      uuid: json['uuid'] as String? ?? '',
+      avatarUrl: json['avatar_url'] as String? ?? '',
+    );
   }
 }
