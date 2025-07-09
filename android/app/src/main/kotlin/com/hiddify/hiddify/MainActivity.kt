@@ -6,6 +6,7 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.net.VpnService
 import android.os.Build
+import android.os.Bundle
 import android.util.Log
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -39,6 +40,13 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
     var logCallback: ((Boolean) -> Unit)? = null
     val serviceStatus = MutableLiveData(Status.Stopped)
     val serviceAlerts = MutableLiveData<ServiceEvent?>(null)
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+
+        // ⏳ 启动时申请存储权限
+        checkAndRequestStoragePermission()
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -164,7 +172,7 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
 
     private fun accessStorage() {
         Log.d(TAG, "✅ 已授权访问相册或存储，可以加载媒体资源")
-        // TODO: 此处可以读取本地图片或打开图库
+        // TODO: 实现访问图库或媒体读取逻辑
     }
 
     override fun onRequestPermissionsResult(
