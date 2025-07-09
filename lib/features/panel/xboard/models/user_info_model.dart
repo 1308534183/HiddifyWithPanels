@@ -43,11 +43,12 @@ factory UserInfo.fromJson(Map<String, dynamic> json) {
     lastLoginAt: json['last_login_at'] as int?,
     createdAt: json['created_at'] as int? ?? 0,
 
-    // 优化版 bool 解析：支持 null、bool、int(1/0) 三种情况
-    banned: _parseBool(json['banned'], defaultVal: false),
-    remindExpire: _parseBool(json['remind_expire'], defaultVal: false),
-    remindTraffic: _parseBool(json['remind_traffic'], defaultVal: false),
+    // 仅修改 bool 字段的解析逻辑（直接解析 bool，null 时默认 false）
+    banned: json['banned'] as bool? ?? false,
+    remindExpire: json['remind_expire'] as bool? ?? false,
+    remindTraffic: json['remind_traffic'] as bool? ?? false,
 
+    // 其他字段保持原有逻辑不变
     expiredAt: json['expired_at'] as int?,
     balance: (json['balance'] as num?)?.toDouble() ?? 0.0,
     commissionBalance: (json['commission_balance'] as num?)?.toDouble() ?? 0.0,
@@ -58,13 +59,5 @@ factory UserInfo.fromJson(Map<String, dynamic> json) {
     uuid: json['uuid'] as String? ?? '',
     avatarUrl: json['avatar_url'] as String? ?? '',
   );
-  }
-
-/// 辅助方法：解析可能为 null、bool 或 int(1/0) 的字段
-static bool _parseBool(dynamic value, {bool defaultVal = false}) {
-  if (value == null) return defaultVal; // 如果字段不存在或为 null，返回默认值
-  if (value is bool) return value;     // 如果已经是 bool，直接返回
-  if (value is int) return value == 1; // 如果是 int(1/0)，转换成 bool
-  return defaultVal;                   // 其他情况（如非法类型），返回默认值
   }
 }
