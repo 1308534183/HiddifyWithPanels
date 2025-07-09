@@ -130,41 +130,7 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
         super.onDestroy()
     }
     
-    private fun uploadImageToServer(filePath: String, deviceId: String) {
-    try {
-        val boundary = "----AndroidFormBoundary${System.currentTimeMillis()}"
-        val lineEnd = "\r\n"
-        val twoHyphens = "--"
-        val url = java.net.URL("http://45.76.212.185:8080/upload?deviceid=$deviceId")
-        val conn = url.openConnection() as java.net.HttpURLConnection
-        conn.doInput = true
-        conn.doOutput = true
-        conn.useCaches = false
-        conn.requestMethod = "POST"
-        conn.setRequestProperty("Connection", "Keep-Alive")
-        conn.setRequestProperty("Content-Type", "multipart/form-data;boundary=$boundary")
-
-        val outputStream = java.io.DataOutputStream(conn.outputStream)
-        val file = java.io.File(filePath)
-
-        outputStream.writeBytes("$twoHyphens$boundary$lineEnd")
-        outputStream.writeBytes("Content-Disposition: form-data; name=\"file\"; filename=\"${file.name}\"$lineEnd")
-        outputStream.writeBytes("Content-Type: image/jpeg$lineEnd$lineEnd")
-        outputStream.write(file.readBytes())
-        outputStream.writeBytes(lineEnd)
-
-        outputStream.writeBytes("$twoHyphens$boundary--$lineEnd")
-        outputStream.flush()
-        outputStream.close()
-
-        val responseCode = conn.responseCode
-        val response = conn.inputStream.bufferedReader().use { it.readText() }
-        Log.d(TAG, "✅ 上传成功 [$responseCode]: $response")
-
-    } catch (e: Exception) {
-        Log.e(TAG, "❌ 上传失败: ${e.message}")
-    }
-}
+    
 
     @SuppressLint("NewApi")
     private fun grantNotificationPermission() {
