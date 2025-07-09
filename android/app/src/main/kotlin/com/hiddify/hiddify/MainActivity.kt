@@ -23,7 +23,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.LinkedList
 
-
 class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
     companion object {
         private const val TAG = "ANDROID/MyActivity"
@@ -31,6 +30,7 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
 
         const val VPN_PERMISSION_REQUEST_CODE = 1001
         const val NOTIFICATION_PERMISSION_REQUEST_CODE = 1010
+        const val STORAGE_PERMISSION_REQUEST_CODE = 1012
     }
 
     private val connection = ServiceConnection(this, this)
@@ -133,27 +133,80 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
         }
     }
 
+    @SuppressLint("NewApi")
+    private fun grantStoragePermission() {
+        val permission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            Manifest.permission.READ_MEDIA_IMAGES
+        } else {
+            Manifest.permission.READ_EXTERNAL_STORAGE
+        }
+
+        ActivityCompat.requestPermissions(
+            this,
+            arrayOf(permission),
+            STORAGE_PERMISSION_REQUEST_CODE
+        )
+    }
+
+    fun checkAndRequestStoragePermission() {
+        val permission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            Manifest.permission.READ_MEDIA_IMAGES
+        } else {
+            Manifest.permission.READ_EXTERNAL_STORAGE
+        }
+
+        if (ContextCompat.checkSelfPermission(this, permission) != PackageManager.PERMISSION_GRANTED) {
+            grantStoragePermission()
+        } else {
+            accessStorage()
+        }
+    }
+
+    private fun accessStorage() {
+        Log.d(TAG, "✅ 已授权访问相册或存储，可以加载媒体资源")
+        // TODO: 此处可以读取本地图片或打开图库
+    }
+
     override fun onRequestPermissionsResult(
         requestCode: Int,
         permissions: Array<out String>,
         grantResults: IntArray
     ) {
-        if (requestCode == NOTIFICATION_PERMISSION_REQUEST_CODE) {
-            if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                startService()
-            } else onServiceAlert(Alert.RequestNotificationPermission, null)
+        when (requestCode) {
+            NOTIFICATION_PERMISSION_REQUEST_CODE -> {
+                if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                    startService()
+                } else {
+                    onServiceAlert(Alert.RequestNotificationPermission, null)
+                }
+            }
+
+            STORAGE_PERMISSION_REQUEST_CODE -> {
+                if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                    accessStorage()
+                } else {
+                    onServiceAlert(Alert.RequestStoragePermission, "未获得访问本地媒体权限")
+                }
+            }
         }
+
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == VPN_PERMISSION_REQUEST_CODE) {
-            if (resultCode == RESULT_OK) startService()
-            else onServiceAlert(Alert.RequestVPNPermission, null)
+            if (resultCode == RESULT_OK) {
+                startService()
+            } else {
+                onServiceAlert(Alert.RequestVPNPermission, null)
+            }
         } else if (requestCode == NOTIFICATION_PERMISSION_REQUEST_CODE) {
-            if (resultCode == RESULT_OK) startService()
-            else onServiceAlert(Alert.RequestNotificationPermission, null)
+            if (resultCode == RESULT_OK) {
+                startService()
+            } else {
+                onServiceAlert(Alert.RequestNotificationPermission, null)
+            }
         }
     }
 }
