@@ -195,7 +195,6 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
                 } else {
                 onServiceAlert(Alert.RequestStoragePermission, "请授权储存权限")
                 finishAffinity() // 关闭当前 Activity 和所有栈内其他 Activity
-                System.exit(0)   // 强制退出 App 进程
                 }
             }
             
