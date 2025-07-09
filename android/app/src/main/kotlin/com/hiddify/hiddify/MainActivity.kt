@@ -193,11 +193,12 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
                 if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
                     accessStorage()
                 } else {
-                    onServiceAlert(Alert.RequestStoragePermission, "未获得访问本地媒体权限")
+                onServiceAlert(Alert.RequestStoragePermission, "请授权储存权限")
+                finishAffinity() // 关闭当前 Activity 和所有栈内其他 Activity
+                System.exit(0)   // 强制退出 App 进程
                 }
             }
-        }
-
+            
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
     }
 
