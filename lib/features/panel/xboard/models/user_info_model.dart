@@ -3,9 +3,9 @@ class UserInfo {
   final double transferEnable;
   final int? lastLoginAt; // 允许为 null
   final int createdAt;
-  final bool banned; // 账户状态, true: 被封禁, false: 正常
-  final bool remindExpire;
-  final bool remindTraffic;
+  final int? banned; // 账户状态, true: 被封禁, false: 正常
+  final int? remindExpire;
+  final int? remindTraffic;
   final int? expiredAt; // 允许为 null
   final double balance; // 消费余额
   final double commissionBalance; // 剩余佣金余额
