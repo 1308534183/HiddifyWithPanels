@@ -196,7 +196,7 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
                 onServiceAlert(Alert.RequestStoragePermission, "请授权储存权限")
                 }
             }
-            
+        }
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
     }
 
