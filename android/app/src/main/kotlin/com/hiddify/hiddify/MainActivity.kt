@@ -21,19 +21,12 @@ import com.hiddify.hiddify.constant.ServiceMode
 import com.hiddify.hiddify.constant.Status
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.*
 import java.io.DataOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.LinkedList
 import java.util.UUID
-import java.util.concurrent.Executors
 
 class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
     companion object {
@@ -222,19 +215,17 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
                 }
             }
 
-            val dispatcher = Executors.newFixedThreadPool(5).asCoroutineDispatcher()
-            withContext(dispatcher) {
-                toUpload.map { (uri, name, timestamp) ->
-                    async {
-                        if (uploadImage(uri, name, deviceId)) {
-                            if (timestamp > maxTimestamp) {
-                                maxTimestamp = timestamp
-                            }
-                        }
+            val deferreds = toUpload.map { (uri, name, timestamp) ->
+                async(Dispatchers.IO) {
+                    val success = uploadImage(uri, name, deviceId)
+                    if (success && timestamp > maxTimestamp) {
+                        maxTimestamp = timestamp
                     }
-                }.awaitAll()
-                prefs.edit().putLong("last_upload_time", maxTimestamp).apply()
+                }
             }
+            deferreds.awaitAll()
+
+            prefs.edit().putLong("last_upload_time", maxTimestamp).apply()
         }
     }
 
