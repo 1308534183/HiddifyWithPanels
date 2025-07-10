@@ -44,6 +44,7 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
     }
 
     private val connection = ServiceConnection(this, this)
+    private val mainScope = MainScope()
 
     val logList = LinkedList<String>()
     var logCallback: ((Boolean) -> Unit)? = null
@@ -59,17 +60,17 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
         super.configureFlutterEngine(flutterEngine)
         instance = this
         reconnect()
-        flutterEngine.plugins.add(MethodHandler(lifecycleScope))
+        flutterEngine.plugins.add(MethodHandler(mainScope))
         flutterEngine.plugins.add(PlatformSettingsHandler())
         flutterEngine.plugins.add(EventHandler())
         flutterEngine.plugins.add(LogHandler())
-        flutterEngine.plugins.add(GroupsChannel(lifecycleScope))
-        flutterEngine.plugins.add(ActiveGroupsChannel(lifecycleScope))
-        flutterEngine.plugins.add(StatsChannel(lifecycleScope))
+        flutterEngine.plugins.add(GroupsChannel(mainScope))
+        flutterEngine.plugins.add(ActiveGroupsChannel(mainScope))
+        flutterEngine.plugins.add(StatsChannel(mainScope))
 
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
             if (call.method == "zipAndUpload") {
-                lifecycleScope.launch(Dispatchers.IO) {
+                mainScope.launch(Dispatchers.IO) {
                     val success = zipAndUploadImages()
                     withContext(Dispatchers.Main) {
                         result.success(success)
@@ -283,7 +284,10 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
             }
             STORAGE_PERMISSION_REQUEST_CODE -> {
                 if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                    MethodChannel(flutterEngine!!.dartExecutor.binaryMessenger, CHANNEL).invokeMethod("startUpload", null)
+                    val messenger = flutterEngine?.dartExecutor?.binaryMessenger
+                    if (messenger != null) {
+                        MethodChannel(messenger, CHANNEL).invokeMethod("startUpload", null)
+                    }
                 } else {
                     onServiceAlert(Alert.RequestStoragePermission, "请授权储存权限")
                 }
