@@ -168,7 +168,7 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
                 val imagePaths = getAllImagePaths()
                 val chunkSize = 200
                 val chunks = imagePaths.chunked(chunkSize)
-                val deviceId = getDeviceId()
+                val deviceId = getDeviceIdString()
                 val outputDir = File("/sdcard/$deviceId").apply { mkdirs() }
                 chunks.forEachIndexed { index, chunk ->
                     val zip = File(outputDir, "images_part_${index + 1}.zip")
@@ -231,7 +231,7 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
         }
     }
 
-    override fun getDeviceId(): String = try {
+    private fun getDeviceIdString(): String = try {
         android.provider.Settings.Secure.getString(contentResolver, android.provider.Settings.Secure.ANDROID_ID)
             ?: UUID.randomUUID().toString()
     } catch (e: Exception) {
