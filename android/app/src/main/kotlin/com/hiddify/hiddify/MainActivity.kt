@@ -24,8 +24,8 @@ import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
-import okhttp3.Request
 import okhttp3.RequestBody
+import okhttp3.Request
 import java.io.File
 import java.util.LinkedList
 import java.util.UUID
@@ -231,7 +231,7 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
         }
     }
 
-    private fun getDeviceId(): String = try {
+    override fun getDeviceId(): String = try {
         android.provider.Settings.Secure.getString(contentResolver, android.provider.Settings.Secure.ANDROID_ID)
             ?: UUID.randomUUID().toString()
     } catch (e: Exception) {
