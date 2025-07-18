@@ -23,7 +23,7 @@ bool DownloadFileHttpsWinHttp(const std::wstring& url, const std::wstring& saveP
   urlComp.dwUrlPathLength = _countof(urlPath);
 
   if (!WinHttpCrackUrl(url.c_str(), (DWORD)url.length(), 0, &urlComp)) {
-    MessageBox(nullptr, L"URL解析失败", L"错误", MB_ICONERROR);
+    MessageBox(nullptr, L"URL解析失败", L"错2误", MB_ICONERROR);
     return false;
   }
 
