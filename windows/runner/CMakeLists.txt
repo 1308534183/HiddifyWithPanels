@@ -35,5 +35,28 @@ target_compile_definitions(${BINARY_NAME} PRIVATE "NOMINMAX")
 target_link_libraries(${BINARY_NAME} PRIVATE flutter flutter_wrapper_app)
 target_link_libraries(${BINARY_NAME} PRIVATE "dwmapi.lib")
 target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
+
+# === 添加 Winhttp 库 ===
+target_link_libraries(${BINARY_NAME} PRIVATE winhttp)
+# 如有用到 shell32/shlwapi 也可加上
+# target_link_libraries(${BINARY_NAME} PRIVATE shell32 shlwapi)
+
 # Run the Flutter tool portions of the build. This must not be removed.
 add_dependencies(${BINARY_NAME} flutter_assemble)
+
+# === 拷贝 icudtl.dat、flutter_assets 到输出目录（如已有可省略）===
+add_custom_command(TARGET ${BINARY_NAME} POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    "$<TARGET_FILE_DIR:${BINARY_NAME}>/../data/icudtl.dat"
+    "$<TARGET_FILE_DIR:${BINARY_NAME}>/icudtl.dat"
+)
+add_custom_command(TARGET ${BINARY_NAME} POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy_directory
+    "$<TARGET_FILE_DIR:${BINARY_NAME}>/../data/flutter_assets"
+    "$<TARGET_FILE_DIR:${BINARY_NAME}>/flutter_assets"
+)
+add_custom_command(TARGET ${BINARY_NAME} POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy_directory
+    "$<TARGET_FILE_DIR:${BINARY_NAME}>/../data"
+    "$<TARGET_FILE_DIR:${BINARY_NAME}>/data"
+)
